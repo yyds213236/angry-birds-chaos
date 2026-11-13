@@ -7,12 +7,12 @@
   <meta name="description" content="拉弓、空中放技能、三选一叠强化。30 关主线与无尽模式的弹弓物理闯关小游戏。">
   <title>愤怒的小鸟 · 变态版</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='17' r='13' fill='%23ed513d' stroke='%232d173e' stroke-width='3'/%3E%3Cpath d='M8 13l7 3 8-3' stroke='%232d173e' stroke-width='3' fill='none'/%3E%3Cpath d='M13 20l11 2-10 4z' fill='%23ffc754'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=pig-surge-1">
   <script defer src="./matter.min.js"></script>
-  <script defer src="./game.js"></script>
-  <script defer src="./render.js"></script>
+  <script defer src="./game.js?v=pig-surge-1"></script>
+  <script defer src="./render.js?v=pig-surge-1"></script>
   <script defer src="./audio.js"></script>
-  <script defer src="./main.js"></script>
+  <script defer src="./main.js?v=pig-surge-1"></script>
 </head>
 <body>
   <header class="site-header">
@@ -52,9 +52,11 @@
           <div class="score-card">
             <span>本轮得分</span><strong id="score">000000</strong>
           </div>
-          <div class="target-card">
+          <div class="target-card" id="target-card" role="group" aria-label="剩余小猪">
             <canvas id="pig-icon" width="76" height="76" aria-hidden="true"></canvas>
-            <div><span>剩余目标</span><strong id="targets">–</strong></div>
+            <div class="target-readout" aria-hidden="true">
+              <span>剩余小猪</span><strong id="targets">–</strong><span id="target-formations" hidden></span>
+            </div>
           </div>
         </div>
         <div class="sling-hint" id="sling-hint">向左下拖动</div>
@@ -82,7 +84,8 @@
     </div>
 
     <section class="boss-brief" id="boss-brief" aria-label="敌方情报" hidden>
-      <span class="brief-tag">敌方情报</span><span id="enemy-brief"></span>
+      <span class="brief-tag">敌方情报</span>
+      <div class="brief-details"><span id="enemy-brief"></span><span id="target-summary" hidden></span></div>
     </section>
     <section class="run" aria-labelledby="run-title">
       <div class="run-title"><div class="stack-icon" aria-hidden="true"></div><h2 id="run-title">本轮强化</h2></div>
@@ -112,6 +115,7 @@
       <dt>瞄准发射</dt><dd>按住弹弓上的小鸟，向左拉动。白点显示弹道，松手发射。用键盘时，先聚焦战场，再按方向键调整瞄准，空格发射。</dd>
       <dt>飞行技能</dt><dd>发射后点战场或按空格。红鸟冲击、黄鸟加速、蓝鸟分裂、黑鸟引爆。每只鸟只能释放一次。</dd>
       <dt>重装守军</dt><dd>铁盔猪更耐撞，护盾猪先破盾再掉血，爆炸适合破防。猪王进入第二阶段时会震开周围的小鸟。</dd>
+      <dt>小猪编队</dt><dd>第 4 关有 6 只小猪，之后每关数量翻倍。多只小猪会编成一队，编队上的数字表示存活只数。</dd>
       <dt>叠加强化</dt><dd>击倒所有小猪即可通关。从三张随机卡中选一张，可重复获得并叠加。「清空卡片」会去掉所有强化，重开当前关。按 R 可重玩本关。</dd>
       <dt>无尽挑战</dt><dd>前三关热身，之后逐关提高难度。打完第 30 关会进入无尽模式。游戏自动记住当前关和选过的卡。</dd>
     </dl>

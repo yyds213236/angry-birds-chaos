@@ -31,6 +31,15 @@
   const maxLaunchSpeed = 50;
   const maxFragments = 13;
   const rewards = ['black', 'blue', 'yellow', 'red'];
+  const formationBits = 6n;
+  const healthBits = 16n;
+  const healthUnits = 1n << healthBits;
+  const countPrecision = formationBits + healthBits;
+  const materializedExponent = 4096;
+  const logPrecision = 10n ** 32n;
+  const logTwo = 30102999566398119521373889472449n;
+  const countFormatter = new Intl.NumberFormat('zh-CN');
+  const countLabels = new Map();
 
   const block = (x, y, w, h, type = 'wood') => ({ kind: 'block', type, x, y, w, h });
   const pig = (x, y, r = 23, type = 'green') => ({ kind: 'pig', type, x, y, r });
@@ -50,7 +59,7 @@
     return Object.freeze({
       id, name, theme, region, rating, ammo: Object.freeze(ammo), description, par,
       boss: layout.some(item => item.type === 'king'),
-      targets: layout.filter(item => item.kind === 'pig').length,
+      groups: layout.filter(item => item.kind === 'pig').length,
       layout: Object.freeze(layout.map(item => Object.freeze(item))),
     });
   }
@@ -289,13 +298,87 @@
     }, 0);
   }
 
+  function countValue(units, adjustment, exponent) {
+    if (!exponent) return units + adjustment;
+    if (!units) return adjustment;
+    while (!(units & 1n)) {
+      units >>= 1n;
+      exponent += 1;
+    }
+    const tail = adjustment > 0n ? ` + ${adjustment}` : adjustment < 0n ? ` − ${-adjustment}` : '';
+    return `${units} × 2^${exponent}${tail}`;
+  }
+
+  function shortDecimal(decimal, places, unit) {
+    const integerDigits = decimal.length - places;
+    const fractionDigits = Math.max(0, Math.min(2, 4 - integerDigits));
+    const value = Number(decimal.slice(0, integerDigits + fractionDigits)) / 10 ** fractionDigits;
+    return value + unit;
+  }
+
+  function formatCount(count) {
+    if (countLabels.has(count)) return countLabels.get(count);
+    const decimal = typeof count === 'bigint' ? count.toString() : '';
+    let label;
+    if (decimal) {
+      if (decimal.length <= 6) label = countFormatter.format(count);
+      else if (decimal.length <= 8) label = shortDecimal(decimal, 4, '万');
+      else if (decimal.length <= 12) label = shortDecimal(decimal, 8, '亿');
+      else if (count === 1000000000000n) label = '1万亿';
+      else label = `${Number(decimal.slice(0, 3)) / 100}e${decimal.length - 1}`;
+    } else {
+      const expression = /^(\d+) × 2\^(\d+)/.exec(String(count));
+      if (expression) {
+        const logPower = BigInt(expression[2]) * logTwo;
+        const fraction = Number(logPower % logPrecision) / Number(logPrecision);
+        const coefficient = Number(expression[1]);
+        const offset = Math.floor(fraction + Math.log10(coefficient));
+        const mantissa = (coefficient * 10 ** (fraction - offset)).toPrecision(3);
+        const decimalPower = logPower / logPrecision + BigInt(offset);
+        label = Number(mantissa) === 10 ? `1e${decimalPower + 1n}` : `${Number(mantissa)}e${decimalPower}`;
+      } else {
+        label = String(count ?? '—');
+      }
+    }
+    if (countLabels.size >= 128) countLabels.clear();
+    countLabels.set(count, label);
+    return label;
+  }
+
+  function withPopulation(entry, index) {
+    const stagePower = index - 3;
+    // Beyond the BigInt display range, every population is expressed as a
+    // small coefficient times 2^countPower, plus a one-pig boss adjustment.
+    // Preserve enough low bits to divide each formation by the health units.
+    const countPower = stagePower > materializedExponent ? stagePower - Number(countPrecision) : 0;
+    const units = stagePower < 0 ? BigInt(entry.groups)
+      : BigInt(openingLevels[3].groups) << (countPower ? countPrecision : BigInt(stagePower));
+    return Object.freeze({ ...entry, countPower, countUnits: units, targets: countValue(units, 0n, countPower) });
+  }
+
+  function formationCounts(stage) {
+    const guards = BigInt(stage.groups - Number(stage.boss));
+    const king = stage.boss ? 1n : 0n;
+    const sharedUnits = stage.countPower ? (stage.countUnits >> healthBits) : stage.countUnits - king;
+    let remainder = sharedUnits % guards;
+    let adjustment = stage.countPower ? -king : 0n;
+    return stage.layout.filter(item => item.kind === 'pig').map(item => {
+      if (item.type === 'king') return { units: stage.countPower ? 0n : 1n, adjustment: stage.countPower ? 1n : 0n };
+      const share = sharedUnits / guards + (remainder > 0n ? 1n : 0n);
+      if (remainder > 0n) remainder -= 1n;
+      const population = stage.countPower ? { units: share << healthBits, adjustment } : { units: share, adjustment: 0n };
+      adjustment = 0n;
+      return population;
+    });
+  }
+
   let lastDurability = 0;
   const levels = Object.freeze([...openingLevels, ...advancedLevels].map((entry, index) => {
     const base = baseDurability(entry.layout);
     const nominal = base * (1 + Math.max(0, index - 3) * 0.014);
     const durability = index < 3 ? base : Math.max(nominal, lastDurability * 1.016);
     lastDurability = durability;
-    return Object.freeze({ ...entry, durability, defense: durability / base });
+    return withPopulation({ ...entry, durability, defense: durability / base }, index);
   }));
 
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -310,14 +393,14 @@
     const route = endlessIndex % 6;
     const region = chapter % sectors.length + 1;
     const sector = sectors[region - 1];
-    const shift = (index * 13 % 41) - 20;
+    const shift = (index % 41 * 13 % 41) - 20;
     const title = sector.missions[route] + ' · 无尽 ' + (chapter + 1);
     const hint = routeHints[route] + ' 无尽关卡的护甲会继续变厚。';
     const layout = missionLayout(route, region, shift);
     const entry = level(title, sector.theme, [...routeAmmo[route]], hint, layout,
       route === 5 ? 5 : 4, index + 1, 'endless-' + (endlessIndex + 1), region);
     const durability = lastDurability + (endlessIndex + 1) * 32;
-    return Object.freeze({ ...entry, durability, defense: durability / baseDurability(layout) });
+    return withPopulation({ ...entry, durability, defense: durability / baseDurability(layout) }, index);
   }
 
   function create({ onChange = () => {}, onEffect = () => {} } = {}) {
@@ -341,7 +424,10 @@
     let birdType = null;
     let abilityUsed = false;
     let score = 0;
-    let remainingTargets = 0;
+    let remainingTargets = 0n;
+    let remainingGroups = 0;
+    let remainingUnits = 0n;
+    let remainingAdjustment = 0n;
     let shots = 0;
     let stars = 0;
     let combo = 0;
@@ -381,6 +467,7 @@
       const ammo = previewAmmo();
       return {
         levelIndex: index, level: currentLevel, status, score, remainingTargets, totalTargets: currentLevel.targets,
+        remainingGroups, totalGroups: currentLevel.groups,
         ammo, ammoCount: ammoCount(), activeBirdType: status === 'flying' ? birdType : ammo[0] || null, abilityUsed,
         sling: world.sling, aim: aimPoint && { ...aimPoint }, trajectory: preview,
         unlimited, shots, stars, combo, shotElapsed, modifiers: { ...modifiers },
@@ -391,7 +478,7 @@
             angle: body.angle, w: data.w, h: data.h, r: data.r, hp: data.hp, maxHp: data.maxHp,
             vx: body.velocity.x, vy: body.velocity.y,
             phase: data.phase, shieldHp: data.shieldHp, shieldMaxHp: data.shieldMaxHp,
-            ...(data.kind === 'pig' ? { name: pigTypes[data.type].name } : {}),
+            ...(data.population ? { name: pigTypes[data.type].name, count: data.count, maxCount: data.maxCount, grouped: data.grouped } : {}),
           };
         }),
       };
@@ -402,13 +489,16 @@
       onChange(getState());
     }
 
-    function createBody(item, primaryBird = false) {
+    function createBody(item, primaryBird = false, population) {
       const bodyMaterial = materials[item.type];
       const bird = item.kind === 'bird';
       const pigType = item.kind === 'pig' ? pigTypes[item.type] : null;
       const staticBody = item.kind === 'platform';
       const baseHp = !staticBody ? bodyMaterial?.hp ?? pigType?.hp ?? (item.kind === 'tnt' ? 18 : Infinity) : Infinity;
-      const defense = pigType ? currentLevel.defense : 1;
+      const maxCount = population ? countValue(population.units, population.adjustment, currentLevel.countPower) : undefined;
+      const grouped = population && maxCount !== 1n;
+      const formationDefense = grouped ? 1 + 0.012 * Math.log2(1 + Math.max(1, index - 3)) : 1;
+      const defense = pigType ? currentLevel.defense * formationDefense : 1;
       const hp = (baseHp + (item.bonusHp || 0)) * defense;
       const shieldHp = (pigType?.shield ?? 0) * defense;
       const options = {
@@ -427,6 +517,7 @@
         id: nextEntityId++, ...item, hp, maxHp: hp, primary: primaryBird,
         shockSpent: false, redBoost: false, bombAge: null,
         phase: 1, shieldHp, shieldMaxHp: shieldHp, guardAt: -Infinity, rageUntil: 0,
+        population, units: population?.units, adjustment: population?.adjustment, count: maxCount, maxCount, grouped,
       };
       bodies.set(body.id, body);
       Composite.add(engine.world, body);
@@ -443,18 +534,46 @@
       changed = true;
     }
 
+    function recordCasualties(data, defeated = false) {
+      let units = 0n;
+      let adjustment = 0n;
+      if (!defeated) {
+        const fraction = BigInt(Math.ceil(clamp(data.hp / data.maxHp, 0, 1) * Number(healthUnits)));
+        const numerator = data.population.units * fraction;
+        units = (numerator + healthUnits - 1n) >> healthBits;
+        // At very high stages the formation is a multiple of 2^countPower,
+        // with at most one pig reserved for the boss. Round survivors up.
+        adjustment = fraction === healthUnits ? data.population.adjustment : 0n;
+      }
+      const lostUnits = data.units - units;
+      const lostAdjustment = data.adjustment - adjustment;
+      if (!lostUnits && !lostAdjustment) return 0n;
+      data.units = units;
+      data.adjustment = adjustment;
+      data.count = countValue(units, adjustment, currentLevel.countPower);
+      remainingUnits -= lostUnits;
+      remainingAdjustment -= lostAdjustment;
+      remainingTargets = countValue(remainingUnits, remainingAdjustment, currentLevel.countPower);
+      changed = true;
+      return countValue(lostUnits, lostAdjustment, currentLevel.countPower);
+    }
+
     function destroy(body) {
       const data = body.plugin.birdGame;
       if (!bodies.has(body.id)) return;
       const { x, y } = body.position;
       removeBody(body);
       if (data.kind === 'pig') {
-        remainingTargets -= 1;
+        const casualties = recordCasualties(data, true);
+        remainingGroups -= 1;
         combo += 1;
         const bonus = Math.min(combo - 1, 5) * 110;
         const gained = pigTypes[data.type].score + bonus;
         points(gained);
-        effect('pig', x, y, { score: scaleToNumber(Math.round(gained * modifiers.score)), combo, material: 'pig', pigType: data.type });
+        effect('pig', x, y, {
+          score: scaleToNumber(Math.round(gained * modifiers.score)), combo, material: 'pig', pigType: data.type,
+          casualties, count: data.count, grouped: data.grouped,
+        });
         return;
       }
       if (data.kind === 'tnt') {
@@ -519,6 +638,12 @@
       if (king && data.hp <= data.maxHp * 0.5) enterRage(body);
       if (armored && data.hp <= data.maxHp * 0.5 && data.hp > 0) pigEffect('armorBreak', body, 0.8);
       if (data.hp <= 0) destroy(body);
+      else if (data.grouped) {
+        const casualties = recordCasualties(data);
+        if (casualties) effect('pigHit', body.position.x, body.position.y, {
+          material: 'pig', pigType: data.type, strength: 0.7, casualties, count: data.count, grouped: true,
+        });
+      }
     }
 
     function nearestDistance(body, x, y) {
@@ -769,7 +894,7 @@
         bomb();
         processBlasts();
       }
-      if (remainingTargets === 0) {
+      if (remainingGroups === 0) {
         winElapsed += stepMs;
         if (winElapsed >= 610) finish(true);
         return;
@@ -781,7 +906,7 @@
       if (primaryData?.type === 'black' && !abilityUsed && bodies.has(primary.id)) {
         bomb();
         processBlasts();
-        if (!remainingTargets) return;
+        if (!remainingGroups) return;
       }
       for (const body of [...bodies.values()]) if (body.plugin.birdGame.kind === 'bird') removeBody(body);
       primary = null;
@@ -843,6 +968,9 @@
       abilityUsed = false;
       score = 0;
       remainingTargets = currentLevel.targets;
+      remainingGroups = currentLevel.groups;
+      remainingUnits = currentLevel.countUnits;
+      remainingAdjustment = 0n;
       shots = 0;
       stars = 0;
       combo = 0;
@@ -854,7 +982,9 @@
         isStatic: true, friction: 0.86, frictionStatic: 1, restitution: 0.02,
       });
       Composite.add(engine.world, ground);
-      for (const item of currentLevel.layout) createBody(item);
+      const populations = formationCounts(currentLevel);
+      let pigIndex = 0;
+      for (const item of currentLevel.layout) createBody(item, false, item.kind === 'pig' ? populations[pigIndex++] : undefined);
       for (let i = 0; i < 70; i++) Engine.update(engine, stepMs);
       Events.on(engine, 'collisionStart', ({ pairs }) => { if (status === 'flying') impacts.push(...pairs); });
       publish();
@@ -896,5 +1026,5 @@
     };
   }
 
-  window.BirdGame = Object.freeze({ create, levels, levelAt, birds, pigTypes, world });
+  window.BirdGame = Object.freeze({ create, levels, levelAt, formatCount, birds, pigTypes, world });
 })();

@@ -1,16 +1,23 @@
 (() => {
   'use strict';
 
-  const { create, birds, world } = window.BirdGame;
+  const { create, birds, world, formatCount = String } = window.BirdGame;
   const audio = window.BirdAudio;
   const $ = id => document.getElementById(id);
   const arena = $('arena');
+  const cabinet = arena.closest('.cabinet');
+  const arenaHud = arena.querySelector('.arena-hud');
   const canvas = $('game');
+  const targetCard = $('target-card') || arenaHud.querySelector('.target-card');
+  const targetReadout = $('targets');
+  const targetFormations = $('target-formations');
+  const targetSummary = $('target-summary');
   const result = $('result');
   const help = $('instructions');
   const confirm = $('confirm');
   const confirmClear = $('confirm-clear');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const narrowPortrait = matchMedia('(max-width: 580px) and (orientation: portrait)');
   const renderer = window.BirdRenderer.create(canvas);
   const cap = 5;
   const cardDeck = [
@@ -38,8 +45,10 @@
   let keyboardAim = { ...initialAim };
   let best = 0;
   let ammoKey = '';
+  let targetKey = '';
   let floatTimer;
   let comboTimer;
+  let lastGroupFeedback = -Infinity;
 
   function savedRun() {
     try {
@@ -72,6 +81,49 @@
   try { best = Math.max(0, Number(localStorage.getItem('slingshot-chaos.best')) || 0); } catch {}
   const format = new Intl.NumberFormat('zh-CN');
   $('best-score').textContent = format.format(best);
+
+  function exactPigCount(value) {
+    return typeof value === 'string' ? value : format.format(value);
+  }
+
+  function positionTargetHud() {
+    const aboveArena = targetFormations && !targetFormations.hidden && narrowPortrait.matches;
+    if (aboveArena && arenaHud.parentElement !== cabinet) cabinet.prepend(arenaHud);
+    if (!aboveArena && arenaHud.parentElement !== arena) canvas.after(arenaHud);
+  }
+  narrowPortrait.addEventListener('change', positionTargetHud);
+
+  function updateTargets(state) {
+    const { remainingTargets, totalTargets, remainingGroups, totalGroups, levelIndex } = state;
+    const key = `${levelIndex}:${remainingTargets}:${totalTargets}:${remainingGroups}:${totalGroups}`;
+    if (key === targetKey) return;
+    targetKey = key;
+    const grouped = levelIndex >= 4 && Number.isFinite(totalGroups);
+    const compact = String(remainingTargets).length > 6 || String(totalTargets).length > 6;
+    const visibleRemaining = formatCount(remainingTargets);
+    const visibleTotal = formatCount(totalTargets);
+    const exact = `剩余 ${exactPigCount(remainingTargets)} 只小猪，本关共 ${exactPigCount(totalTargets)} 只`;
+    const groupCaption = grouped ? ` · ${remainingGroups}/${totalGroups} 队` : '';
+    targetCard.dataset.remaining = String(remainingTargets);
+    targetCard.dataset.total = String(totalTargets);
+    targetCard.toggleAttribute('data-compact', compact);
+    targetCard.title = exact + groupCaption;
+    targetCard.setAttribute('aria-label', exact + groupCaption);
+    targetReadout.textContent = compact ? visibleRemaining : `${visibleRemaining}/${visibleTotal}`;
+    if (targetFormations) {
+      targetFormations.hidden = !grouped;
+      if (grouped) targetFormations.textContent = `编队 ${remainingGroups}/${totalGroups}`;
+    }
+    if (targetSummary) {
+      targetSummary.hidden = !grouped;
+      if (grouped) {
+        const readableExact = typeof remainingTargets === 'string' || String(totalTargets).length <= 13;
+        targetSummary.textContent = (readableExact ? exact : `剩余 ${visibleRemaining} 只小猪，本关共 ${visibleTotal} 只`) + groupCaption;
+        targetSummary.title = exact + groupCaption;
+      }
+    }
+    positionTargetHud();
+  }
 
   function updateProgress(state) {
     const idx = state.levelIndex;
@@ -232,7 +284,7 @@
     canvas.dataset.mode = state.status;
     $('sling-hint').hidden = state.levelIndex !== 0 || state.shots > 0 || state.status !== 'ready';
     $('score').textContent = String(stageTotal + state.score).padStart(6, '0');
-    $('targets').textContent = state.remainingTargets + '/' + state.totalTargets;
+    updateTargets(state);
     updateAmmo(state);
     const skill = state.activeBirdType && birds[state.activeBirdType];
     const available = state.status === 'flying' && !state.abilityUsed && Boolean(skill);
@@ -244,7 +296,7 @@
       ? state.level.description : '拖动小鸟瞄准，松手发射。';
     if (state.status === 'aiming') $('control-hint').textContent = '沿着预览弹道瞄准，松手发射。';
     if (state.status === 'flying') $('control-hint').textContent = available
-      ? '点击战场、按空格或点右侧按钮释放技能。' : '等待飞行和连锁碰撞结束。';
+      ? '点击战场、按空格或点技能按钮。' : '等待飞行和连锁碰撞结束。';
     if ((state.status === 'won' || state.status === 'lost') && state.status !== previous?.status) {
       rememberBest(stageTotal + state.score);
       pendingResult = window.setTimeout(() => showResult(state), reduced.matches ? 100 : 560);
@@ -260,12 +312,19 @@
 
   function onEffect(event) {
     renderer.effect(event);
-    const cue = { guard: 'hit', armorBreak: 'break', shieldBreak: 'break', rage: 'blast', kingRage: 'blast' }[event.type];
+    const cue = { guard: 'hit', armorBreak: 'break', shieldBreak: 'break', rage: 'blast', kingRage: 'blast', pigHit: 'hit' }[event.type];
     audio.play(cue || event.type);
     if (event.type === 'blast' && event.material === 'tnt') transient('combo', '轰！');
     if (event.type === 'armorBreak' || event.type === 'shieldBreak') transient('combo', '破防！');
     if (event.type === 'rage' || event.type === 'kingRage') transient('combo', '猪王暴怒！');
-    if (event.type === 'pig' && event.combo > 1) transient('combo', event.combo + ' 连锁击倒！');
+    if ((event.type === 'pigHit' || event.type === 'pig') && event.grouped && event.casualties) {
+      const now = performance.now();
+      const combo = $('combo');
+      if (now - lastGroupFeedback >= 340 && !(combo.classList.contains('on') && combo.textContent === '猪王暴怒！')) {
+        lastGroupFeedback = now;
+        transient('combo', '击倒 ' + formatCount(event.casualties) + ' 只！');
+      }
+    } else if (event.type === 'pig' && event.combo > 1) transient('combo', event.combo + ' 连锁击倒！');
   }
 
   const game = create({ onChange, onEffect });
@@ -285,6 +344,7 @@
     clearTimeout(comboTimer);
     $('notice').classList.remove('on');
     $('combo').classList.remove('on');
+    lastGroupFeedback = -Infinity;
     cancelGesture();
     keyboardAim = { ...initialAim };
     renderer.reset();
@@ -380,7 +440,7 @@
     $('result-copy').textContent = mainCleared
       ? '30 关全通 · ' + (historyStars + state.stars) + '/90 星 · 选卡后继续挑战第 31 关。'
       : won ? '本关 ' + state.stars + '/3 星 · +' + format.format(state.score) + ' 分'
-        : '还有 ' + state.remainingTargets + ' 个目标。' + (upgrades.size ? '重玩本关时，你的强化卡仍然有效。' : '试试换一个角度或调整出手顺序。');
+        : '还有 ' + formatCount(state.remainingTargets) + ' 只小猪。' + (upgrades.size ? '重玩本关时，你的强化卡仍然有效。' : '试试换一个角度或调整出手顺序。');
     $('draw').hidden = !won;
     $('cards').replaceChildren();
     $('result-actions').replaceChildren();

@@ -4,6 +4,7 @@
   const WORLD_WIDTH = 1280;
   const WORLD_HEIGHT = 600;
   const TAU = 2 * Math.PI;
+  const formationOffsets = [[-.94, -.34], [.92, -.39], [-.08, -.9]];
 
   const birdPalettes = {
     red: { light: "#ff8463", base: "#f64f48", shade: "#b92840", ink: "#752837", belly: "#ffd0a0", brow: "#4b2636" },
@@ -356,6 +357,49 @@
     }
   }
 
+  function drawFormation(ctx, { x, y, r, count }) {
+    const size = Number(count);
+    const figures = Number.isFinite(size) ? Math.min(size - 1, 3) : 2;
+    for (let index = 0; index < figures; index += 1) {
+      const [dx, dy] = formationOffsets[index];
+      const cx = x + dx * r;
+      const cy = y + dy * r;
+      const radius = r * .57;
+      ellipse(ctx, cx - radius * .42, cy - radius * .75, radius * .28, radius * .35, '#a1d967', '#31583c', 1.9);
+      ellipse(ctx, cx + radius * .42, cy - radius * .75, radius * .28, radius * .35, '#a1d967', '#31583c', 1.9);
+      ellipse(ctx, cx, cy, radius, radius * .87, '#96c75e', '#31583c', 2.1);
+      ellipse(ctx, cx, cy + radius * .27, radius * .54, radius * .32, '#d0e584', '#547744', 1.1);
+      ellipse(ctx, cx - radius * .16, cy + radius * .28, radius * .07, radius * .1, '#466045');
+      ellipse(ctx, cx + radius * .16, cy + radius * .28, radius * .07, radius * .1, '#466045');
+    }
+  }
+
+  function measureFormationBadge(ctx, label, canvasScale) {
+    const size = Math.max(17, 9.5 / canvasScale);
+    const font = `850 ${size}px system-ui, sans-serif`;
+    ctx.font = font;
+    const maxTextWidth = Math.max(90, 67 / canvasScale);
+    const width = Math.min(ctx.measureText(label).width, maxTextWidth) + size * .62;
+    return { label, font, width, height: size * 1.19, maxTextWidth };
+  }
+
+  function drawFormationBadge(ctx, entity, badge, canvasScale, placed) {
+    const { x, y, r } = entity;
+    const { label, width, height, font, maxTextWidth } = badge;
+    const left = Math.max(2, Math.min(WORLD_WIDTH - width - 2, x - width / 2));
+    const top = Math.max(1, Math.min(WORLD_HEIGHT - height - 2, y + r * .88));
+    const overlaps = placed.some(box => left < box.right + 3 && left + width + 3 > box.left
+      && top < box.bottom + 3 && top + height + 3 > box.top);
+    if (overlaps) return;
+    placed.push({ left, top, right: left + width, bottom: top + height });
+    ctx.font = font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    rounded(ctx, left, top, width, height, height * .3, '#263949', '#e8f5bf', Math.max(1.6, .65 / canvasScale));
+    ctx.fillStyle = '#eff9c6';
+    ctx.fillText(label, left + width / 2, top + height / 2, maxTextWidth);
+  }
+
   function drawBlock(ctx, entity) {
     const material = entity.kind === "tnt" ? "tnt" : entity.type;
     const palette = blockPalettes[material] || blockPalettes.wood;
@@ -589,6 +633,8 @@
     let groundArt = null;
     let width = 0;
     let height = 0;
+    let canvasScale = 1;
+    const formationLabels = new Map();
     let needsResize = true;
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => { needsResize = true; }) : null;
     observer?.observe(canvas);
@@ -601,10 +647,12 @@
       if (!needsResize) return;
       const box = canvas.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvasScale = Math.max(.1, Math.min(box.width / WORLD_WIDTH, box.height / WORLD_HEIGHT));
       width = Math.max(1, Math.round(box.width * ratio));
       height = Math.max(1, Math.round(box.height * ratio));
       canvas.width = width;
       canvas.height = height;
+      formationLabels.clear();
       needsResize = false;
     }
 
@@ -671,6 +719,8 @@
         wave(x, y, event.radius || 83, flame, .53, true);
         puff(x, y, Math.round(32 * density), flame, 227, "star");
         if (!reduceMotion) shake = Math.min(13, shake + 5);
+      } else if (type === "pigHit") {
+        puff(x, y, Math.round(7 * density), fxColors.pig, 105);
       } else if (type === "pig") {
         const king = event.pigType === "king";
         wave(x, y, king ? 86 : 42, king ? ["#ffecad", "#ffc071", "#ff8791"] : ["#eaffb0", "#9bcf60"], king ? .47 : .32);
@@ -792,6 +842,7 @@
       particles = [];
       waves = [];
       trails.clear();
+      formationLabels.clear();
       shake = 0;
     }
 
@@ -835,6 +886,7 @@
           const healthRatio = entity.hp / entity.maxHp;
           const shieldRatio = entity.shieldMaxHp > 0 ? entity.shieldHp / entity.shieldMaxHp : undefined;
           const blink = (elapsed + (Number(id) || 0) * .73) % 5.3 > 5.16;
+          if (entity.grouped) drawFormation(ctx, entity);
           drawPig(ctx, x, y, r, angle, healthRatio < .56, blink, type, {
             healthRatio,
             shieldRatio,
@@ -858,8 +910,18 @@
         band(ctx, pouch.x, pouch.y + 3, sling.x + 25, sling.y - 6, true);
       }
       paintEffects(dt, true);
+      const badges = [];
       for (const entity of entities) {
-        if (entity.kind === "pig") drawPigHealth(ctx, entity);
+        if (entity.kind !== 'pig') continue;
+        drawPigHealth(ctx, entity);
+        if (!entity.grouped) continue;
+        let entry = formationLabels.get(entity.id);
+        if (entry?.count !== entity.count) {
+          const label = '×' + window.BirdGame.formatCount(entity.count);
+          entry = { count: entity.count, badge: measureFormationBadge(ctx, label, canvasScale) };
+          formationLabels.set(entity.id, entry);
+        }
+        drawFormationBadge(ctx, entity, entry.badge, canvasScale, badges);
       }
       ctx.restore();
     }
