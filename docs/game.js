@@ -31,10 +31,11 @@
   const maxLaunchSpeed = 50;
   const maxFragments = 13;
   const rewards = ['black', 'blue', 'yellow', 'red'];
-  const formationBits = 6n;
-  const healthBits = 16n;
-  const healthUnits = 1n << healthBits;
-  const countPrecision = formationBits + healthBits;
+  const waveSize = 96n;
+  const stockAmmo = ['black', 'yellow', 'black', 'blue', 'black', 'red'];
+  const neutralCamera = Object.freeze({ scale: 1, x: 0, y: 0 });
+  const wideCamera = Object.freeze({ scale: .8, x: 17, y: 97 });
+  const middleCamera = Object.freeze({ scale: .88, x: 12, y: 58 });
   const materializedExponent = 4096;
   const logPrecision = 10n ** 32n;
   const logTwo = 30102999566398119521373889472449n;
@@ -309,6 +310,10 @@
     return `${units} × 2^${exponent}${tail}`;
   }
 
+  function powerOfTwo(value, exponent) {
+    return value > 0n && value.toString(2).length === exponent + 1 && (value & (value - 1n)) === 0n;
+  }
+
   function shortDecimal(decimal, places, unit) {
     const integerDigits = decimal.length - places;
     const fractionDigits = Math.max(0, Math.min(2, 4 - integerDigits));
@@ -347,29 +352,62 @@
 
   function withPopulation(entry, index) {
     const stagePower = index - 3;
-    // Beyond the BigInt display range, every population is expressed as a
-    // small coefficient times 2^countPower, plus a one-pig boss adjustment.
-    // Preserve enough low bits to divide each formation by the health units.
-    const countPower = stagePower > materializedExponent ? stagePower - Number(countPrecision) : 0;
+    const countPower = stagePower > materializedExponent ? stagePower : 0;
     const units = stagePower < 0 ? BigInt(entry.groups)
-      : BigInt(openingLevels[3].groups) << (countPower ? countPrecision : BigInt(stagePower));
-    return Object.freeze({ ...entry, countPower, countUnits: units, targets: countValue(units, 0n, countPower) });
+      : BigInt(openingLevels[3].groups) << BigInt(countPower ? 0 : stagePower);
+    const totalWaves = countPower ? countValue(1n, 0n, stagePower - 4) : (units + waveSize - 1n) / waveSize;
+    return Object.freeze({ ...entry, countPower, countUnits: units, totalWaves, targets: countValue(units, 0n, countPower) });
   }
 
-  function formationCounts(stage) {
-    const guards = BigInt(stage.groups - Number(stage.boss));
-    const king = stage.boss ? 1n : 0n;
-    const sharedUnits = stage.countPower ? (stage.countUnits >> healthBits) : stage.countUnits - king;
-    let remainder = sharedUnits % guards;
-    let adjustment = stage.countPower ? -king : 0n;
-    return stage.layout.filter(item => item.kind === 'pig').map(item => {
-      if (item.type === 'king') return { units: stage.countPower ? 0n : 1n, adjustment: stage.countPower ? 1n : 0n };
-      const share = sharedUnits / guards + (remainder > 0n ? 1n : 0n);
-      if (remainder > 0n) remainder -= 1n;
-      const population = stage.countPower ? { units: share << healthBits, adjustment } : { units: share, adjustment: 0n };
-      adjustment = 0n;
-      return population;
-    });
+  function overlaps(a, b) {
+    return Math.abs(a.x - b.x) < (a.w ?? a.r * 2) / 2 + (b.w ?? b.r * 2) / 2 + 3
+      && Math.abs(a.y - b.y) < (a.h ?? a.r * 2) / 2 + (b.h ?? b.r * 2) / 2 + 3;
+  }
+
+  function crowdedLayout(stage, index, wave, size) {
+    if (index < 4) return stage.layout;
+    const firstWave = wave === 1n;
+    const layout = firstWave ? stage.layout.map(item => item.kind === 'platform' ? { ...item, breakable: true } : item) : [];
+    const waveSeed = Number(wave % 41n);
+    const radius = index < 6 ? 20 : 17;
+    const lanes = index < 6 ? [530, 815, 1100] : [446, 726, 1006, 1286];
+    const floors = [G, 422, 350, 278, 206, 134, 62, -10];
+    const available = (item, shelf) => layout.every(part => !overlaps(part, item) && (!shelf || !overlaps(part, shelf)));
+    const addOnShelf = (item, floor, width) => {
+      const shelf = floor === G ? null : { ...platform(item.x, floor + 5, width, 10), breakable: true, shelf: true };
+      if (!available(item, shelf)) return false;
+      if (shelf) layout.push(shelf);
+      layout.push(item);
+      return true;
+    };
+
+    if (index >= 6) {
+      for (const lane of lanes) {
+        for (const [row, shift] of [[0, -12], [2, 24], [4, -25], [6, 11]]) {
+          const floor = floors[row];
+          for (const offset of [shift, shift + 46, shift - 48, shift + 83]) {
+            if (addOnShelf(tnt(lane + offset, floor - 15, 30), floor, 36)) break;
+          }
+        }
+      }
+    }
+
+    let pigs = layout.filter(item => item.kind === 'pig').length;
+    for (let row = 0; row < floors.length && pigs < size; row++) {
+      const floor = floors[row];
+      for (const [column, lane] of lanes.entries()) {
+        const offset = index < 6 ? 0 : (waveSeed + column * 4) % 13 - 6;
+        for (const dx of [-105, -62, -19, 24, 67, 110]) {
+          const x = lane + dx + offset;
+          const elite = index >= 7 && (pigs + row + column + waveSeed) % 19 === 0;
+          const type = elite ? 'armored' : 'green';
+          const item = { ...pig(x, floor - radius, radius, type), crowd: true };
+          if (addOnShelf(item, floor, 36) && ++pigs === size) break;
+        }
+        if (pigs === size) break;
+      }
+    }
+    return layout;
   }
 
   let lastDurability = 0;
@@ -404,7 +442,7 @@
   }
 
   function create({ onChange = () => {}, onEffect = () => {} } = {}) {
-    const { Engine, Bodies, Body, Composite, Events, Sleeping } = window.Matter;
+    const { Engine, Bodies, Body, Composite, Events, Query, Sleeping } = window.Matter;
     let engine;
     let bodies = new Map();
     let motion = new Map();
@@ -425,9 +463,17 @@
     let abilityUsed = false;
     let score = 0;
     let remainingTargets = 0n;
-    let remainingGroups = 0;
-    let remainingUnits = 0n;
-    let remainingAdjustment = 0n;
+    let wave = 1n;
+    let waveScore = 0;
+    let waveShots = 0;
+    let clearedTargets = 0n;
+    let activeTargets = 0;
+    let waveCapacity = 0;
+    let queuedTargets = 0n;
+    let camera = neutralCamera;
+    let wakeDynamics = false;
+    let nextSupportCheck = 0;
+    let ground;
     let shots = 0;
     let stars = 0;
     let combo = 0;
@@ -467,7 +513,8 @@
       const ammo = previewAmmo();
       return {
         levelIndex: index, level: currentLevel, status, score, remainingTargets, totalTargets: currentLevel.targets,
-        remainingGroups, totalGroups: currentLevel.groups,
+        wave, totalWaves: currentLevel.totalWaves, activeTargets, queuedTargets, clearedTargets, camera,
+        checkpoint: { wave, score: waveScore, shots: waveShots },
         ammo, ammoCount: ammoCount(), activeBirdType: status === 'flying' ? birdType : ammo[0] || null, abilityUsed,
         sling: world.sling, aim: aimPoint && { ...aimPoint }, trajectory: preview,
         unlimited, shots, stars, combo, shotElapsed, modifiers: { ...modifiers },
@@ -476,9 +523,10 @@
           return {
             id: data.id, kind: data.kind, type: data.type, x: body.position.x, y: body.position.y,
             angle: body.angle, w: data.w, h: data.h, r: data.r, hp: data.hp, maxHp: data.maxHp,
-            vx: body.velocity.x, vy: body.velocity.y,
+            vx: body.velocity.x, vy: body.velocity.y, sleeping: body.isSleeping,
             phase: data.phase, shieldHp: data.shieldHp, shieldMaxHp: data.shieldMaxHp,
-            ...(data.population ? { name: pigTypes[data.type].name, count: data.count, maxCount: data.maxCount, grouped: data.grouped } : {}),
+            ...(data.breakable ? { breakable: true, shelf: Boolean(data.shelf) } : {}),
+            ...(data.kind === 'pig' ? { name: pigTypes[data.type].name, count: 1n, maxCount: 1n } : {}),
           };
         }),
       };
@@ -489,16 +537,14 @@
       onChange(getState());
     }
 
-    function createBody(item, primaryBird = false, population) {
+    function createBody(item, primaryBird = false) {
       const bodyMaterial = materials[item.type];
       const bird = item.kind === 'bird';
       const pigType = item.kind === 'pig' ? pigTypes[item.type] : null;
       const staticBody = item.kind === 'platform';
-      const baseHp = !staticBody ? bodyMaterial?.hp ?? pigType?.hp ?? (item.kind === 'tnt' ? 18 : Infinity) : Infinity;
-      const maxCount = population ? countValue(population.units, population.adjustment, currentLevel.countPower) : undefined;
-      const grouped = population && maxCount !== 1n;
-      const formationDefense = grouped ? 1 + 0.012 * Math.log2(1 + Math.max(1, index - 3)) : 1;
-      const defense = pigType ? currentLevel.defense * formationDefense : 1;
+      const baseHp = staticBody ? item.breakable ? item.shelf ? 32 : 58 : Infinity
+        : bodyMaterial?.hp ?? pigType?.hp ?? (item.kind === 'tnt' ? 18 : Infinity);
+      const defense = pigType ? item.crowd ? Math.min(2.3, currentLevel.defense * .76) : currentLevel.defense : 1;
       const hp = (baseHp + (item.bonusHp || 0)) * defense;
       const shieldHp = (pigType?.shield ?? 0) * defense;
       const options = {
@@ -517,7 +563,6 @@
         id: nextEntityId++, ...item, hp, maxHp: hp, primary: primaryBird,
         shockSpent: false, redBoost: false, bombAge: null,
         phase: 1, shieldHp, shieldMaxHp: shieldHp, guardAt: -Infinity, rageUntil: 0,
-        population, units: population?.units, adjustment: population?.adjustment, count: maxCount, maxCount, grouped,
       };
       bodies.set(body.id, body);
       Composite.add(engine.world, body);
@@ -525,6 +570,8 @@
     }
 
     function removeBody(body) {
+      const data = body.plugin.birdGame;
+      if (data.kind === 'block' || data.kind === 'tnt' || data.kind === 'platform' || data.kind === 'pig') wakeDynamics = true;
       Composite.remove(engine.world, body);
       bodies.delete(body.id);
     }
@@ -534,28 +581,9 @@
       changed = true;
     }
 
-    function recordCasualties(data, defeated = false) {
-      let units = 0n;
-      let adjustment = 0n;
-      if (!defeated) {
-        const fraction = BigInt(Math.ceil(clamp(data.hp / data.maxHp, 0, 1) * Number(healthUnits)));
-        const numerator = data.population.units * fraction;
-        units = (numerator + healthUnits - 1n) >> healthBits;
-        // At very high stages the formation is a multiple of 2^countPower,
-        // with at most one pig reserved for the boss. Round survivors up.
-        adjustment = fraction === healthUnits ? data.population.adjustment : 0n;
-      }
-      const lostUnits = data.units - units;
-      const lostAdjustment = data.adjustment - adjustment;
-      if (!lostUnits && !lostAdjustment) return 0n;
-      data.units = units;
-      data.adjustment = adjustment;
-      data.count = countValue(units, adjustment, currentLevel.countPower);
-      remainingUnits -= lostUnits;
-      remainingAdjustment -= lostAdjustment;
-      remainingTargets = countValue(remainingUnits, remainingAdjustment, currentLevel.countPower);
-      changed = true;
-      return countValue(lostUnits, lostAdjustment, currentLevel.countPower);
+    function populationAfter(defeated) {
+      if (currentLevel.countPower && defeated % 6n === 0n && powerOfTwo(defeated / 6n, currentLevel.countPower)) return 0n;
+      return countValue(currentLevel.countUnits, -defeated, currentLevel.countPower);
     }
 
     function destroy(body) {
@@ -564,15 +592,16 @@
       const { x, y } = body.position;
       removeBody(body);
       if (data.kind === 'pig') {
-        const casualties = recordCasualties(data, true);
-        remainingGroups -= 1;
+        activeTargets -= 1;
+        const defeated = clearedTargets + BigInt(waveCapacity - activeTargets);
+        remainingTargets = populationAfter(defeated);
         combo += 1;
         const bonus = Math.min(combo - 1, 5) * 110;
         const gained = pigTypes[data.type].score + bonus;
         points(gained);
         effect('pig', x, y, {
           score: scaleToNumber(Math.round(gained * modifiers.score)), combo, material: 'pig', pigType: data.type,
-          casualties, count: data.count, grouped: data.grouped,
+          casualties: 1n, count: 0n,
         });
         return;
       }
@@ -581,7 +610,7 @@
         blasts.push({ x, y, radius: 210, force: 1.05, material: 'tnt' });
         return;
       }
-      if (data.kind === 'block') {
+      if (data.kind === 'block' || data.kind === 'platform') {
         points(materials[data.type].score);
         effect('break', x, y, { material: data.type, strength: 0.85, score: scaleToNumber(Math.round(materials[data.type].score * modifiers.score)) });
       }
@@ -638,12 +667,6 @@
       if (king && data.hp <= data.maxHp * 0.5) enterRage(body);
       if (armored && data.hp <= data.maxHp * 0.5 && data.hp > 0) pigEffect('armorBreak', body, 0.8);
       if (data.hp <= 0) destroy(body);
-      else if (data.grouped) {
-        const casualties = recordCasualties(data);
-        if (casualties) effect('pigHit', body.position.x, body.position.y, {
-          material: 'pig', pigType: data.type, strength: 0.7, casualties, count: data.count, grouped: true,
-        });
-      }
     }
 
     function nearestDistance(body, x, y) {
@@ -664,7 +687,7 @@
         const radius = scaleToNumber(baseRadius * modifiers.blast);
         effect('blast', x, y, { material, birdType: sourceBird, radius, strength: force, combo });
         for (const body of [...bodies.values()]) {
-          if (body.isStatic) continue;
+          if (body.isStatic && !body.plugin.birdGame.breakable) continue;
           const dist = nearestDistance(body, x, y);
           if (dist >= radius) continue;
           const falloff = Math.pow(1 - dist / radius, 0.72);
@@ -675,12 +698,14 @@
           const data = body.plugin.birdGame;
           const recoil = data.kind === 'pig' ? pigTypes[data.type].recoil : 1;
           const massScale = clamp(2.8 / body.mass, 0.34, 1.65) * recoil;
-          Sleeping.set(body, false);
-          Body.setVelocity(body, {
-            x: body.velocity.x + dx / norm * impulse * massScale,
-            y: body.velocity.y + (dy / norm - 0.58) * impulse * massScale,
-          });
-          Body.setAngularVelocity(body, body.angularVelocity + clamp(dx / 180, -1, 1) * 0.32 * falloff * force);
+          if (!body.isStatic) {
+            Sleeping.set(body, false);
+            Body.setVelocity(body, {
+              x: body.velocity.x + dx / norm * impulse * massScale,
+              y: body.velocity.y + (dy / norm - 0.58) * impulse * massScale,
+            });
+            Body.setAngularVelocity(body, body.angularVelocity + clamp(dx / 180, -1, 1) * 0.32 * falloff * force);
+          }
           damage(body, (data.kind === 'tnt' ? 100 : data.kind === 'pig' ? 117 : 119) * falloff * force * Math.sqrt(modifiers.impact) * damageScale, 'blast');
         }
       }
@@ -762,8 +787,8 @@
         vy = vy * (1 - air / 2) + gravity * 0.001 * stepMs * stepMs;
         x += vx;
         y += vy;
-        if (y > G - 18 || x > world.width || x < -15) break;
-        if (i % 6 === 5 && y >= 12) points.push({ x, y });
+        if (y > G - 18 || x > (world.width - camera.x) / camera.scale || x < -15) break;
+        if (i % 6 === 5 && y >= -camera.y / camera.scale + 12) points.push({ x, y });
       }
       return points;
     }
@@ -872,7 +897,8 @@
       status = won ? 'won' : 'lost';
       if (won) {
         const { par } = currentLevel;
-        stars = shots <= par ? 3 : shots <= par + 1 ? 2 : 1;
+        const allowance = wave * BigInt(par);
+        stars = BigInt(shots) <= allowance ? 3 : BigInt(shots) <= allowance + 1n ? 2 : 1;
         points(ammoCount() * 150);
       }
       effect(won ? 'win' : 'loss', world.width / 2, 238, { score, combo, stars });
@@ -883,7 +909,8 @@
       shotElapsed += stepMs;
       for (const body of [...bodies.values()]) {
         if (body.isStatic) continue;
-        if (body.position.x < -160 || body.position.x > world.width + 160 || body.position.y > world.height + 160) {
+        const worldRight = (world.width - camera.x) / camera.scale;
+        if (body.position.x < -160 || body.position.x > worldRight + 160 || body.position.y > world.height + 160) {
           if (body.plugin.birdGame.kind === 'bird') removeBody(body);
           else if (body.plugin.birdGame.kind === 'pig') destroy(body);
           else removeBody(body);
@@ -894,9 +921,18 @@
         bomb();
         processBlasts();
       }
-      if (remainingGroups === 0) {
+      if (activeTargets === 0) {
         winElapsed += stepMs;
-        if (winElapsed >= 610) finish(true);
+        if (winElapsed >= 610) {
+          if (queuedTargets) {
+            effect('waveCleared', world.width / 2, 220, { wave });
+            wave += 1n;
+            waveScore = score;
+            waveShots = shots;
+            spawnWave();
+            effect('reinforcement', world.width / 2, 220, { wave, activeTargets });
+          } else finish(true);
+        }
         return;
       }
       const movingBird = [...bodies.values()].some(body => body.plugin.birdGame.kind === 'bird' && Math.hypot(body.velocity.x, body.velocity.y) > 0.72);
@@ -906,7 +942,7 @@
       if (primaryData?.type === 'black' && !abilityUsed && bodies.has(primary.id)) {
         bomb();
         processBlasts();
-        if (!remainingGroups) return;
+        if (!activeTargets) return;
       }
       for (const body of [...bodies.values()]) if (body.plugin.birdGame.kind === 'bird') removeBody(body);
       primary = null;
@@ -923,6 +959,16 @@
       accumulator += Math.min(deltaMs, 75);
       while (accumulator >= stepMs) {
         accumulator -= stepMs;
+        if (wakeDynamics) {
+          wakeDynamics = false;
+          for (const body of bodies.values()) {
+            if (body.isSleeping) Sleeping.set(body, false);
+          }
+        }
+        if (engine.timing.timestamp >= nextSupportCheck) {
+          nextSupportCheck = engine.timing.timestamp + 125;
+          wakeUnsupportedPigs();
+        }
         motion.clear();
         if (status === 'flying') {
           for (const body of bodies.values()) motion.set(body.id, Body.getVelocity(body));
@@ -939,16 +985,25 @@
       if (changed) publish();
     }
 
-    function loadLevel(levelIndex) {
-      const nextLevel = levelAt(levelIndex);
-      if (!nextLevel) return false;
+    function wakeUnsupportedPigs() {
+      const sceneBodies = [ground, ...bodies.values()];
+      for (const body of sceneBodies) {
+        if (!body.isSleeping || body.plugin.birdGame?.kind !== 'pig') continue;
+        // Sleeping bodies can retain their old position when an underlying
+        // body slides away without breaking. Probe the entire lower surface.
+        const { min, max } = body.bounds;
+        const footprint = { min: { x: min.x, y: max.y - 5 }, max: { x: max.x, y: max.y + 4 } };
+        const under = Query.region(sceneBodies, footprint);
+        if (!under.some(support => support !== body && support.bounds.max.y > max.y + 1)) Sleeping.set(body, false);
+      }
+    }
+
+    function spawnWave() {
       if (engine) {
         Events.off(engine);
         Composite.clear(engine.world, false, true);
         Engine.clear(engine);
       }
-      index = levelIndex;
-      currentLevel = nextLevel;
       engine = Engine.create({ enableSleeping: true, positionIterations: 10, velocityIterations: 7, constraintIterations: 3 });
       engine.gravity.y = gravity;
       engine.gravity.scale = 0.001;
@@ -956,8 +1011,16 @@
       motion = new Map();
       impacts = [];
       blasts = [];
-      nextEntityId = 1;
-      queue = [...currentLevel.ammo];
+      const size = currentLevel.countPower || currentLevel.countUnits >= waveSize ? Number(waveSize) : Number(currentLevel.countUnits);
+      clearedTargets = (wave - 1n) * waveSize;
+      activeTargets = size;
+      waveCapacity = size;
+      remainingTargets = populationAfter(clearedTargets);
+      queuedTargets = populationAfter(clearedTargets + BigInt(size));
+      camera = index < 4 ? neutralCamera : index < 6 ? middleCamera : wideCamera;
+      const layout = crowdedLayout(currentLevel, index, wave, size);
+      queue = wave === 1n ? [...currentLevel.ammo] : [...stockAmmo];
+      if (index >= 6) queue.push('black', 'black', 'yellow');
       reserveAmmo = modifiers.extraAmmo;
       reserveIndex = 0;
       status = 'ready';
@@ -966,27 +1029,48 @@
       primary = null;
       birdType = null;
       abilityUsed = false;
-      score = 0;
-      remainingTargets = currentLevel.targets;
-      remainingGroups = currentLevel.groups;
-      remainingUnits = currentLevel.countUnits;
-      remainingAdjustment = 0n;
-      shots = 0;
-      stars = 0;
       combo = 0;
       shotElapsed = 0;
       inactivity = 0;
       winElapsed = 0;
       accumulator = 0;
-      const ground = Bodies.rectangle(world.width / 2, G + 75, world.width + 130, 150, {
+      previousHit = -Infinity;
+      wakeDynamics = false;
+      nextSupportCheck = 0;
+      const groundRight = index < 4 ? world.width : (world.width - camera.x) / camera.scale;
+      ground = Bodies.rectangle(groundRight / 2, G + 75, groundRight + 130, 150, {
         isStatic: true, friction: 0.86, frictionStatic: 1, restitution: 0.02,
       });
       Composite.add(engine.world, ground);
-      const populations = formationCounts(currentLevel);
-      let pigIndex = 0;
-      for (const item of currentLevel.layout) createBody(item, false, item.kind === 'pig' ? populations[pigIndex++] : undefined);
+      for (const item of layout) createBody(item);
       for (let i = 0; i < 70; i++) Engine.update(engine, stepMs);
       Events.on(engine, 'collisionStart', ({ pairs }) => { if (status === 'flying') impacts.push(...pairs); });
+      changed = true;
+    }
+
+    function loadLevel(levelIndex, checkpoint = {}) {
+      const nextLevel = levelAt(levelIndex);
+      if (!nextLevel) return false;
+      index = levelIndex;
+      currentLevel = nextLevel;
+      const requestedWave = checkpoint.wave;
+      const validWave = typeof requestedWave === 'bigint' && requestedWave > 1n
+        && (nextLevel.countPower ? requestedWave.toString(2).length <= nextLevel.countPower - 4
+          || powerOfTwo(requestedWave, nextLevel.countPower - 4) : requestedWave <= nextLevel.totalWaves);
+      wave = validWave ? requestedWave : 1n;
+      waveScore = validWave && Number.isFinite(checkpoint.score) ? Math.max(0, checkpoint.score) : 0;
+      waveShots = validWave && Number.isSafeInteger(checkpoint.shots) ? Math.max(0, checkpoint.shots) : 0;
+      stars = 0;
+      nextEntityId = 1;
+      retryWave();
+      return true;
+    }
+
+    function retryWave() {
+      score = waveScore;
+      shots = waveShots;
+      stars = 0;
+      spawnWave();
       publish();
       return true;
     }
@@ -1020,7 +1104,7 @@
 
     loadLevel(0);
     return {
-      getState, step, aim, cancelAim, launch, useAbility, loadLevel, setUnlimited, setModifiers,
+      getState, step, aim, cancelAim, launch, useAbility, loadLevel, retryWave, setUnlimited, setModifiers,
       reset: () => loadLevel(index),
       nextLevel: () => loadLevel(index + 1),
     };

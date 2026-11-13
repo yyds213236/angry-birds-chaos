@@ -4,7 +4,7 @@
   const WORLD_WIDTH = 1280;
   const WORLD_HEIGHT = 600;
   const TAU = 2 * Math.PI;
-  const formationOffsets = [[-.94, -.34], [.92, -.39], [-.08, -.9]];
+  const DEFAULT_CAMERA = { scale: 1, x: 0, y: 0 };
 
   const birdPalettes = {
     red: { light: "#ff8463", base: "#f64f48", shade: "#b92840", ink: "#752837", belly: "#ffd0a0", brow: "#4b2636" },
@@ -340,64 +340,23 @@
   }
 
   function drawPigHealth(ctx, entity) {
+    if (entity.type === "green") return;
     const health = Math.max(0, Math.min(1, entity.hp / entity.maxHp));
-    if (entity.type === "green" || !Number.isFinite(health)) return;
+    const shield = entity.shieldMaxHp > 0 ? entity.shieldHp / entity.shieldMaxHp : null;
+    const king = entity.type === "king";
+    if (!Number.isFinite(health) || (!king && health > .99 && (shield === null || shield > .99))) return;
     const { x, y, r } = entity;
-    const width = entity.type === "king" ? 78 : 48;
-    const top = y - r * (entity.type === "king" ? 1.98 : 1.71) - 6;
+    const width = king ? 69 : r * 1.35;
+    const top = y - r * (king ? 1.98 : entity.type === "armored" ? 1.49 : 1.26) - 5;
     const left = x - width / 2;
-    rounded(ctx, left, top, width, 7, 3, "#51435de6", "#423751", 1.1);
-    const healthWidth = (width - 3) * health;
-    if (healthWidth > 0) {
-      rounded(ctx, left + 1.5, top + 1.5, healthWidth, 4, 2, entity.phase === 2 ? "#ff8775" : "#def17d");
+    const thickness = king ? 6 : 4.5;
+    rounded(ctx, left, top, width, thickness, 2.5, "#51435de6", "#423751", 1.05);
+    if (health > 0) {
+      rounded(ctx, left + 1, top + 1, (width - 2) * health, thickness - 2, 1.3, entity.phase === 2 ? "#ff8775" : "#def17d");
     }
-    if (entity.shieldHp > 0 && entity.shieldMaxHp > 0) {
-      const shieldWidth = (width - 3) * Math.min(1, entity.shieldHp / entity.shieldMaxHp);
-      rounded(ctx, left + 1.5, top + 1.5, shieldWidth, 4, 2, "#a9dff9");
+    if (shield > 0) {
+      rounded(ctx, left + 1, top - 2.5, (width - 2) * Math.min(1, shield), 2, 1, "#a9dff9", "#475784", .8);
     }
-  }
-
-  function drawFormation(ctx, { x, y, r, count }) {
-    const size = Number(count);
-    const figures = Number.isFinite(size) ? Math.min(size - 1, 3) : 2;
-    for (let index = 0; index < figures; index += 1) {
-      const [dx, dy] = formationOffsets[index];
-      const cx = x + dx * r;
-      const cy = y + dy * r;
-      const radius = r * .57;
-      ellipse(ctx, cx - radius * .42, cy - radius * .75, radius * .28, radius * .35, '#a1d967', '#31583c', 1.9);
-      ellipse(ctx, cx + radius * .42, cy - radius * .75, radius * .28, radius * .35, '#a1d967', '#31583c', 1.9);
-      ellipse(ctx, cx, cy, radius, radius * .87, '#96c75e', '#31583c', 2.1);
-      ellipse(ctx, cx, cy + radius * .27, radius * .54, radius * .32, '#d0e584', '#547744', 1.1);
-      ellipse(ctx, cx - radius * .16, cy + radius * .28, radius * .07, radius * .1, '#466045');
-      ellipse(ctx, cx + radius * .16, cy + radius * .28, radius * .07, radius * .1, '#466045');
-    }
-  }
-
-  function measureFormationBadge(ctx, label, canvasScale) {
-    const size = Math.max(17, 9.5 / canvasScale);
-    const font = `850 ${size}px system-ui, sans-serif`;
-    ctx.font = font;
-    const maxTextWidth = Math.max(90, 67 / canvasScale);
-    const width = Math.min(ctx.measureText(label).width, maxTextWidth) + size * .62;
-    return { label, font, width, height: size * 1.19, maxTextWidth };
-  }
-
-  function drawFormationBadge(ctx, entity, badge, canvasScale, placed) {
-    const { x, y, r } = entity;
-    const { label, width, height, font, maxTextWidth } = badge;
-    const left = Math.max(2, Math.min(WORLD_WIDTH - width - 2, x - width / 2));
-    const top = Math.max(1, Math.min(WORLD_HEIGHT - height - 2, y + r * .88));
-    const overlaps = placed.some(box => left < box.right + 3 && left + width + 3 > box.left
-      && top < box.bottom + 3 && top + height + 3 > box.top);
-    if (overlaps) return;
-    placed.push({ left, top, right: left + width, bottom: top + height });
-    ctx.font = font;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    rounded(ctx, left, top, width, height, height * .3, '#263949', '#e8f5bf', Math.max(1.6, .65 / canvasScale));
-    ctx.fillStyle = '#eff9c6';
-    ctx.fillText(label, left + width / 2, top + height / 2, maxTextWidth);
   }
 
   function drawBlock(ctx, entity) {
@@ -485,43 +444,44 @@
     ctx.restore();
   }
 
-  function paintGround(ctx, groundY, theme) {
-    const warm = ["lava", "sunset", "volcano"].includes(theme);
+  function paintGround(ctx, groundY, theme, left, right, bottom) {
+    const warm = ["lava", "sunset", "volcano", "quarry", "industrial"].includes(theme);
+    const deepColor = warm ? "#99526c" : "#a95e6a";
     const soil = fade(ctx, 0, groundY, 0, WORLD_HEIGHT, warm
-      ? [[0, "#e5a35d"], [.34, "#c97657"], [1, "#99526c"]]
-      : [[0, "#eeb66f"], [.39, "#d58b62"], [1, "#a95e6a"]]);
+      ? [[0, "#e5a35d"], [.34, "#c97657"], [1, deepColor]]
+      : [[0, "#eeb66f"], [.39, "#d58b62"], [1, deepColor]]);
     ctx.fillStyle = soil;
-    ctx.fillRect(0, groundY, WORLD_WIDTH, WORLD_HEIGHT - groundY);
+    ctx.fillRect(left, groundY, right - left, bottom - groundY);
 
     path(ctx, p => {
-      p.moveTo(0, groundY);
-      for (let i = 0; i < WORLD_WIDTH; i += 32) {
-        const depth = 15 + 5 * Math.sin(i * .037);
-        p.quadraticCurveTo(i + 17, groundY + depth + 4, i + 32, groundY + depth);
+      p.moveTo(left, groundY);
+      for (let x = left; x < right; x += 32) {
+        const depth = 15 + 5 * Math.sin(x * .037);
+        p.quadraticCurveTo(x + 17, groundY + depth + 4, x + 32, groundY + depth);
       }
-      p.lineTo(WORLD_WIDTH, groundY);
+      p.lineTo(right, groundY);
       p.closePath();
     }, warm ? "#e4ae55" : "#9eac49");
     ctx.fillStyle = warm ? "#f9df79" : "#d9d760";
-    ctx.fillRect(0, groundY, WORLD_WIDTH, 5);
+    ctx.fillRect(left, groundY, right - left, 5);
     ctx.fillStyle = "#fff0a466";
-    ctx.fillRect(0, groundY, WORLD_WIDTH, 1.8);
+    ctx.fillRect(left, groundY, right - left, 1.8);
     path(ctx, p => {
-      p.moveTo(0, groundY + 55);
-      p.bezierCurveTo(322, groundY + 22, 423, groundY + 77, 655, groundY + 55);
-      p.bezierCurveTo(893, groundY + 34, 1031, groundY + 62, WORLD_WIDTH, groundY + 37);
-      p.lineTo(WORLD_WIDTH, WORLD_HEIGHT); p.lineTo(0, WORLD_HEIGHT); p.closePath();
+      p.moveTo(left, groundY + 55);
+      for (let x = left; x < right; x += 320) {
+        p.quadraticCurveTo(x + 158, groundY + 40 + 13 * Math.sin(x / 120), x + 320, groundY + 55);
+      }
+      p.lineTo(right, bottom); p.lineTo(left, bottom); p.closePath();
     }, "#ac5e6b35");
 
-    for (let i = 0; i < 48; i += 1) {
-      const x = (i * 163 + 17) % WORLD_WIDTH;
-      const y = groundY + 20 + (i * 29 + 19) % (WORLD_HEIGHT - groundY - 16);
-      const size = 1.5 + (i * 19 % 9) * .48;
-      ellipse(ctx, x, y, size * 1.5, size * .55, i % 3 ? "#77434b28" : "#ffdc9849", null, 0, -.19);
+    for (let index = 0; index < Math.ceil((right - left) / 27); index += 1) {
+      const x = left + (index * 163 + 17) % (right - left);
+      const y = groundY + 20 + (index * 29 + 19) % (bottom - groundY - 16);
+      const size = 1.5 + (index * 19 % 9) * .48;
+      ellipse(ctx, x, y, size * 1.5, size * .55, index % 3 ? "#77434b28" : "#ffdc9849", null, 0, -.19);
     }
-    const tufts = [17, 59, 106, 315, 360, 506, 561, 651, 1183, 1231, 1263];
-    for (const x of tufts) {
-      const size = 6 + (x % 9);
+    for (let x = left + 17; x < right; x += 47 + Math.abs(x % 35)) {
+      const size = 6 + Math.abs(x % 9);
       path(ctx, p => {
         p.moveTo(x - 5, groundY + 3);
         p.quadraticCurveTo(x - 7, groundY - size / 2, x - 13, groundY - size / 1.6);
@@ -605,11 +565,31 @@
   }
 
   function drawPlatform(ctx, entity) {
-    const { x, y, w, h, angle = 0 } = entity;
+    const { x, y, w, h, angle = 0, breakable, hp, maxHp } = entity;
     if (!w || !h) return;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
+    if (breakable) {
+      const rim = "#684453";
+      const beam = fade(ctx, 0, -h / 2, 0, h / 2, [[0, "#dba377"], [.46, "#ba7c66"], [1, "#8f5764"]]);
+      rounded(ctx, -w / 2, -h / 2, w, h, 3, beam, rim, 1.8);
+      path(ctx, p => {
+        p.moveTo(-w / 2 + 4, -h / 2 + 1.3);
+        p.lineTo(w / 2 - 4, -h / 2 + 1.3);
+      }, null, "#fbd398", 1.65);
+      for (let offset = -w / 2 + 6; offset <= w / 2 - 4; offset += 27) {
+        ellipse(ctx, offset, h * .15, 1.45, 1.45, "#ffdfa2", rim, .95);
+      }
+      if (hp < maxHp * .72) {
+        path(ctx, p => {
+          p.moveTo(w * .1, -h / 2); p.lineTo(w * .02, -h * .08);
+          p.lineTo(w * .085, h * .05); p.lineTo(-w * .07, h / 2);
+        }, null, rim, 1.75);
+      }
+      ctx.restore();
+      return;
+    }
     const palette = fade(ctx, 0, -h / 2, 0, h / 2, [[0, "#e6c68b"], [.3, "#b4a2a7"], [1, "#857c98"]]);
     rounded(ctx, -w / 2, -h / 2, w, h, 7, palette, "#675975", 2);
     path(ctx, p => {
@@ -633,8 +613,7 @@
     let groundArt = null;
     let width = 0;
     let height = 0;
-    let canvasScale = 1;
-    const formationLabels = new Map();
+    let displayedCamera = DEFAULT_CAMERA;
     let needsResize = true;
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => { needsResize = true; }) : null;
     observer?.observe(canvas);
@@ -647,28 +626,51 @@
       if (!needsResize) return;
       const box = canvas.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      canvasScale = Math.max(.1, Math.min(box.width / WORLD_WIDTH, box.height / WORLD_HEIGHT));
       width = Math.max(1, Math.round(box.width * ratio));
       height = Math.max(1, Math.round(box.height * ratio));
       canvas.width = width;
       canvas.height = height;
-      formationLabels.clear();
       needsResize = false;
     }
 
-    function drawGround(groundY, theme) {
+    function drawGround(groundY, theme, camera) {
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      if (groundArt?.theme !== theme || groundArt?.y !== groundY || groundArt?.ratio !== ratio) {
-        const top = groundY - 26;
+      const left = -camera.x / camera.scale;
+      const right = (WORLD_WIDTH - camera.x) / camera.scale;
+      const bottom = (WORLD_HEIGHT - camera.y) / camera.scale;
+      const top = groundY - 26;
+      if (groundArt?.theme !== theme || groundArt?.y !== groundY || groundArt?.ratio !== ratio
+        || left < groundArt.left || right > groundArt.right || bottom > groundArt.bottom) {
+        const bounds = {
+          left: Math.min(-160, Math.floor(left / 64) * 64),
+          right: Math.max(1792, Math.ceil(right / 64) * 64),
+          bottom: Math.max(704, Math.ceil(bottom / 64) * 64, groundY + 32),
+        };
         const layer = document.createElement("canvas");
-        layer.width = Math.round(WORLD_WIDTH * ratio);
-        layer.height = Math.round((WORLD_HEIGHT - top) * ratio);
+        layer.width = Math.round((bounds.right - bounds.left) * ratio);
+        layer.height = Math.round((bounds.bottom - top) * ratio);
         const groundCtx = layer.getContext("2d");
-        groundCtx.setTransform(ratio, 0, 0, ratio, 0, -top * ratio);
-        paintGround(groundCtx, groundY, theme);
-        groundArt = { layer, top, ratio, theme, y: groundY };
+        groundCtx.setTransform(ratio, 0, 0, ratio, -bounds.left * ratio, -top * ratio);
+        paintGround(groundCtx, groundY, theme, bounds.left, bounds.right, bounds.bottom);
+        groundArt = { layer, top, ratio, theme, y: groundY, ...bounds };
       }
-      ctx.drawImage(groundArt.layer, 0, groundArt.top, WORLD_WIDTH, WORLD_HEIGHT - groundArt.top);
+      ctx.drawImage(groundArt.layer, groundArt.left, groundArt.top,
+        groundArt.right - groundArt.left, groundArt.bottom - groundArt.top);
+    }
+
+    function pointFromClient(clientX, clientY) {
+      const box = canvas.getBoundingClientRect();
+      const { scale, x, y } = displayedCamera;
+      const widthInPixels = box.width || 1;
+      const heightInPixels = box.height || 1;
+      const unitsPerPixelX = WORLD_WIDTH / (widthInPixels * scale);
+      const unitsPerPixelY = WORLD_HEIGHT / (heightInPixels * scale);
+      return {
+        x: (clientX - box.left) * unitsPerPixelX - x / scale,
+        y: (clientY - box.top) * unitsPerPixelY - y / scale,
+        unitsPerPixelX,
+        unitsPerPixelY,
+      };
     }
 
     function puff(x, y, count, colors, speed, kind = "chip") {
@@ -842,7 +844,6 @@
       particles = [];
       waves = [];
       trails.clear();
-      formationLabels.clear();
       shake = 0;
     }
 
@@ -863,8 +864,12 @@
       const flick = state.aim || reduceMotion ? 0 : Math.sin(elapsed * 3.3) * 1.4;
       const groundTheme = state.level?.theme;
 
-      drawGround(ground, groundTheme);
+      const camera = state.camera ? { ...state.camera } : DEFAULT_CAMERA;
+      displayedCamera = camera;
       ctx.save();
+      ctx.translate(camera.x, camera.y);
+      ctx.scale(camera.scale, camera.scale);
+      drawGround(ground, groundTheme, camera);
       if (shake > .2) {
         ctx.translate(Math.sin(elapsed * 92) * shake * .38, Math.cos(elapsed * 77) * shake * .34);
         shake *= Math.pow(.055, dt);
@@ -886,7 +891,6 @@
           const healthRatio = entity.hp / entity.maxHp;
           const shieldRatio = entity.shieldMaxHp > 0 ? entity.shieldHp / entity.shieldMaxHp : undefined;
           const blink = (elapsed + (Number(id) || 0) * .73) % 5.3 > 5.16;
-          if (entity.grouped) drawFormation(ctx, entity);
           drawPig(ctx, x, y, r, angle, healthRatio < .56, blink, type, {
             healthRatio,
             shieldRatio,
@@ -910,24 +914,15 @@
         band(ctx, pouch.x, pouch.y + 3, sling.x + 25, sling.y - 6, true);
       }
       paintEffects(dt, true);
-      const badges = [];
       for (const entity of entities) {
-        if (entity.kind !== 'pig') continue;
-        drawPigHealth(ctx, entity);
-        if (!entity.grouped) continue;
-        let entry = formationLabels.get(entity.id);
-        if (entry?.count !== entity.count) {
-          const label = '×' + window.BirdGame.formatCount(entity.count);
-          entry = { count: entity.count, badge: measureFormationBadge(ctx, label, canvasScale) };
-          formationLabels.set(entity.id, entry);
-        }
-        drawFormationBadge(ctx, entity, entry.badge, canvasScale, badges);
+        if (entity.kind === "pig") drawPigHealth(ctx, entity);
       }
       ctx.restore();
     }
 
     return {
-      draw, effect, reset, invalidate,
+      draw, effect, reset, invalidate, pointFromClient,
+      getCamera() { return { ...displayedCamera }; },
       dispose() {
         observer?.disconnect();
         if (!observer) window.removeEventListener("resize", invalidate);

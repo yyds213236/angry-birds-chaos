@@ -6,6 +6,19 @@ require('../docs/game.js');
 const { create, levelAt, levels, world } = window.BirdGame;
 
 const targetsAt = stage => BigInt(levelAt(stage - 1).targets);
+const pigsIn = state => state.entities.filter(entity => entity.kind === 'pig');
+const fire = (game, dx, dy, skillAt, observe = () => {}) => {
+  assert.ok(game.aim(world.sling.x - dx, world.sling.y + dy));
+  assert.ok(game.launch());
+  for (let frame = 0; frame < 520; frame++) {
+    if (frame === skillAt) game.useAbility();
+    game.step(1000 / 60);
+    const state = game.getState();
+    observe(state);
+    if (state.status !== 'flying' && state.status !== 'reinforcing') return state;
+  }
+  return game.getState();
+};
 
 test('the campaign starts with 3, 4, 5, 6 pigs and then doubles into endless mode', () => {
   assert.equal(levels.length, 30);
@@ -17,72 +30,87 @@ test('the campaign starts with 3, 4, 5, 6 pigs and then doubles into endless mod
   assert.equal(targetsAt(31), 805306368n);
 });
 
-test('formations account for the whole population without one body per pig', () => {
+test('each on-field pig is an individual, and the camera fits the expanded battlefield', () => {
   const game = create();
-  for (const stage of [5, 6, 9, 30, 31, 64, 128]) {
+  let previousScale = 1;
+  for (const stage of [4, 5, 6, 7, 8, 9, 30, 31, 64, 128]) {
     assert.equal(game.loadLevel(stage - 1), true);
     const state = game.getState();
-    const pigs = state.entities.filter(entity => entity.kind === 'pig');
-    const count = pigs.reduce((total, entity) => total + BigInt(entity.count), 0n);
-    assert.equal(count, targetsAt(stage), `stage ${stage}`);
-    assert.equal(BigInt(state.remainingTargets), count);
-    assert.ok(pigs.length <= 24, `stage ${stage}: ${pigs.length} physical groups`);
-    assert.ok(pigs.every(entity => entity.type !== 'king' || BigInt(entity.count) === 1n));
+    const pigs = pigsIn(state);
+    assert.equal(pigs.length, state.activeTargets);
+    assert.equal(new Set(pigs.map(pig => pig.id)).size, pigs.length);
+    assert.ok(pigs.every(pig => pig.count === undefined || pig.count === 1n));
+    assert.equal(BigInt(state.queuedTargets) + BigInt(pigs.length), targetsAt(stage));
+    if (stage <= 8) {
+      assert.equal(pigs.length, Number(targetsAt(stage)));
+      assert.ok(state.camera.scale <= previousScale, `stage ${stage}: camera zoomed in`);
+      previousScale = state.camera.scale;
+    } else {
+      assert.ok(pigs.length <= 96);
+      assert.ok(state.queuedTargets > 0n);
+    }
+    const {scale, x, y} = state.camera;
+    assert.ok(scale > 0 && scale <= 1);
+    for (const pig of pigs) {
+      assert.ok(pig.x * scale + x > 0 && pig.x * scale + x < world.width, `stage ${stage}: pig outside horizontally`);
+      assert.ok(pig.y * scale + y > 0 && pig.y * scale + y < world.height, `stage ${stage}: pig outside vertically`);
+    }
   }
+  assert.ok(previousScale < 1);
 });
 
-test('endless counts stay exact after the decimal representation would become enormous', () => {
+test('very large endless stages still distinguish the exact population from the pigs on screen', () => {
   const game = create();
   const stage = 1_000_002;
   assert.equal(game.loadLevel(stage - 1), true);
   const state = game.getState();
   assert.equal(state.remainingTargets, `3 × 2^${stage - 3}`);
-  const pigs = state.entities.filter(entity => entity.kind === 'pig');
-  const parts = pigs.map(({ count }) => {
-    if (typeof count === 'bigint') return [0n, stage, count];
-    const [, coefficient, power, sign, offset] = /^(\d+) × 2\^(\d+)(?: ([+−]) (\d+))?$/.exec(count);
-    return [BigInt(coefficient), Number(power), BigInt(offset || 0) * (sign === '−' ? -1n : 1n)];
-  });
-  const sharedPower = Math.min(...parts.map(([, power]) => power));
-  assert.equal(parts.reduce((total, [coefficient, power]) => total + (coefficient << BigInt(power - sharedPower)), 0n),
-    3n << BigInt(stage - 3 - sharedPower));
-  assert.equal(parts.reduce((total, [, , offset]) => total + offset, 0n), 0n);
-  assert.ok(pigs.some(entity => entity.type === 'king' && entity.count === 1n));
+  assert.equal(state.activeTargets, pigsIn(state).length);
+  assert.ok(state.activeTargets > 0 && state.activeTargets <= 96);
+  assert.equal(state.queuedTargets, `3 × 2^${stage - 3} − ${state.activeTargets}`);
 });
 
-test('damage reduces the population by the same amount as the formations, and a clear advances the multiplier', () => {
-  let casualties = 0n;
-  const game = create({ onEffect: event => {
-    if (event.casualties !== undefined) casualties += BigInt(event.casualties);
-  } });
-  game.setModifiers({ blast: 7, impact: 3, shock: 500, extraAmmo: 3 });
+test('a pig drops when a shot destroys its raised support', () => {
+  const game = create();
   assert.equal(game.loadLevel(4), true);
-  let prior = game.getState().totalTargets;
-  const aim = () => {
-    assert.equal(game.aim(world.sling.x - 105, world.sling.y + 26), true);
-    assert.equal(game.launch(), true);
-  };
-  const check = () => {
-    const state = game.getState();
-    const current = BigInt(state.remainingTargets);
-    const visible = state.entities.filter(e => e.kind === 'pig')
-      .reduce((total, entity) => total + BigInt(entity.count), 0n);
-    assert.equal(current, visible);
-    assert.equal(current + casualties, 12n);
-    assert.ok(current <= prior);
-    prior = current;
-    return state;
-  };
-  for (let shot = 0; shot < 4 && game.getState().status === 'ready'; shot++) {
-    aim();
-    for (let frame = 0; frame < 500; frame++) {
-      if (frame === 42) game.useAbility();
-      game.step(1000 / 60);
-      if (check().status !== 'flying') break;
+  for (let frame = 0; frame < 150; frame++) game.step(1000 / 60);
+  const initial = game.getState();
+  const raised = initial.entities.find(entity => entity.kind === 'platform' && entity.breakable && entity.x === 665);
+  assert.ok(raised, 'the first raised platform is breakable');
+  const pig = pigsIn(initial).find(entity => Math.abs(entity.x - raised.x) < 16 && Math.abs(entity.y + entity.r - raised.y + raised.h / 2) < 8);
+  assert.ok(pig, 'a pig starts on the platform');
+  assert.equal(pig.sleeping, true, 'the pig has stopped moving before the shot');
+  let observedFall = false;
+  fire(game, 35, 24, 24, state => {
+    const falling = pigsIn(state).find(entity => entity.id === pig.id);
+    if (falling && !state.entities.some(entity => entity.id === raised.id) && falling.y > pig.y + 35 && falling.vy > 1.2) {
+      observedFall = true;
     }
-  }
-  assert.equal(prior, 0n);
-  assert.equal(game.getState().status, 'won');
+  });
+  assert.ok(observedFall, 'the same living pig falls below the missing platform under gravity');
+});
+
+test('reinforcements each spawn as real pigs and retry restores only the current wave', () => {
+  const deaths = [];
+  const game = create({onEffect: event => { if (event.type === 'pig') deaths.push(event.casualties); }});
+  game.setModifiers({blast: 12, impact: 10, shock: 620, extraAmmo: 6});
+  assert.equal(game.loadLevel(8), true);
+  assert.equal(game.getState().wave, 1n);
+  const next = fire(game, 105, 26, 38);
+  assert.equal(next.wave, 2n);
+  assert.equal(next.activeTargets, 96);
+  assert.equal(next.queuedTargets, 0n);
+  assert.equal(next.remainingTargets, 96n);
+  assert.equal(deaths.length, 96);
+  assert.ok(next.ammoCount > 0);
+  assert.equal(game.retryWave(), true);
+  assert.equal(game.getState().wave, 2n);
+  assert.equal(game.getState().clearedTargets, 96n);
+  assert.equal(game.loadLevel(8, next.checkpoint), true);
+  assert.equal(game.getState().remainingTargets, 96n);
+  assert.equal(fire(game, 105, 26, 38).status, 'won');
+  assert.equal(deaths.length, 192);
+  assert.ok(deaths.every(count => count === 1n));
   assert.equal(game.nextLevel(), true);
-  assert.equal(BigInt(game.getState().remainingTargets), 24n);
+  assert.equal(game.getState().totalTargets, 384n);
 });
