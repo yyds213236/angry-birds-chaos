@@ -367,7 +367,8 @@
   function crowdedLayout(stage, index, wave, size) {
     if (index < 4) return stage.layout;
     const firstWave = wave === 1n;
-    const layout = firstWave ? stage.layout.map(item => item.kind === 'platform' ? { ...item, breakable: true } : item) : [];
+    const layout = firstWave ? stage.layout.filter(item => item.kind !== 'tnt')
+      .map(item => item.kind === 'platform' ? { ...item, breakable: true } : item) : [];
     const waveSeed = Number(wave % 41n);
     const radius = index < 6 ? 20 : 17;
     const lanes = index < 6 ? [530, 815, 1100] : [446, 726, 1006, 1286];
@@ -380,17 +381,6 @@
       layout.push(item);
       return true;
     };
-
-    if (index >= 6) {
-      for (const lane of lanes) {
-        for (const [row, shift] of [[0, -12], [2, 24], [4, -25], [6, 11]]) {
-          const floor = floors[row];
-          for (const offset of [shift, shift + 46, shift - 48, shift + 83]) {
-            if (addOnShelf(tnt(lane + offset, floor - 15, 30), floor, 36)) break;
-          }
-        }
-      }
-    }
 
     let pigs = layout.filter(item => item.kind === 'pig').length;
     for (let row = 0; row < floors.length && pigs < size; row++) {
@@ -405,6 +395,27 @@
           if (addOnShelf(item, floor, 36) && ++pigs === size) break;
         }
         if (pigs === size) break;
+      }
+    }
+
+    if (firstWave) {
+      // Retain the authored explosives at the edge of the battlefield only.
+      // The crowd never spawns with boxes between pigs or on its shelves.
+      let left = Math.min(...layout.map(item => item.x - (item.w ?? item.r * 2) / 2));
+      let right = Math.max(...layout.map(item => item.x + (item.w ?? item.r * 2) / 2));
+      const middle = (left + right) / 2;
+      const camera = index < 6 ? middleCamera : wideCamera;
+      const edge = (world.width - camera.x) / camera.scale;
+      for (const box of stage.layout.filter(item => item.kind === 'tnt')) {
+        const roomOnLeft = left - box.w - 14 >= world.sling.x + 56;
+        const roomOnRight = right + box.w + 14 <= edge - 14;
+        if (roomOnLeft && (box.x < middle || !roomOnRight)) {
+          layout.push(tnt(left - box.w / 2 - 14, G - box.h / 2, box.w));
+          left -= box.w + 14;
+        } else if (roomOnRight) {
+          layout.push(tnt(right + box.w / 2 + 14, G - box.h / 2, box.w));
+          right += box.w + 14;
+        }
       }
     }
     return layout;

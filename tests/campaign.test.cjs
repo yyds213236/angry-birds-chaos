@@ -59,6 +59,27 @@ test('each on-field pig is an individual, and the camera fits the expanded battl
   assert.ok(previousScale < 1);
 });
 
+test('TNT stays outside the pigs on crowded stages and does not spawn with reinforcements', () => {
+  const game = create();
+  for (let stage = 5; stage <= 36; stage++) {
+    game.loadLevel(stage - 1);
+    const { entities, camera } = game.getState();
+    const pigs = entities.filter(entity => entity.kind === 'pig');
+    const left = Math.min(...pigs.map(pig => pig.x - pig.r));
+    const right = Math.max(...pigs.map(pig => pig.x + pig.r));
+    const boxes = entities.filter(entity => entity.kind === 'tnt');
+    assert.equal(boxes.length, levelAt(stage - 1).layout.filter(item => item.kind === 'tnt').length);
+    for (const box of boxes) {
+      assert.ok(box.x + box.w / 2 < left || box.x - box.w / 2 > right, `stage ${stage}: TNT inside the crowd`);
+      assert.ok(Math.abs(box.y + box.h / 2 - world.groundY) < 1, `stage ${stage}: TNT off the ground`);
+      assert.ok((box.x + box.w / 2) * camera.scale + camera.x < world.width, `stage ${stage}: TNT outside the camera`);
+    }
+  }
+  game.loadLevel(8, { wave: 2n });
+  assert.equal(game.getState().wave, 2n);
+  assert.equal(game.getState().entities.filter(entity => entity.kind === 'tnt').length, 0);
+});
+
 test('very large endless stages still distinguish the exact population from the pigs on screen', () => {
   const game = create();
   const stage = 1_000_002;
