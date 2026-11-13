@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d133a">
+  <meta name="description" content="拉弓、空中放技能、三选一叠强化。30 关主线与无尽模式的弹弓物理闯关小游戏。">
+  <title>愤怒的小鸟 · 变态版</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='17' r='13' fill='%23ed513d' stroke='%232d173e' stroke-width='3'/%3E%3Cpath d='M8 13l7 3 8-3' stroke='%232d173e' stroke-width='3' fill='none'/%3E%3Cpath d='M13 20l11 2-10 4z' fill='%23ffc754'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./matter.min.js"></script>
+  <script defer src="./game.js"></script>
+  <script defer src="./render.js"></script>
+  <script defer src="./audio.js"></script>
+  <script defer src="./main.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <div class="brand">
+        <canvas id="brand-bird" width="100" height="100" aria-hidden="true"></canvas>
+        <div><strong>愤怒的小鸟</strong><span>变态版</span></div>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="sound" class="icon-btn" aria-label="关闭音效" title="关闭音效" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l4 4V5L8 9H4Z"/><path class="speaker-wave" d="M15 9a4 4 0 0 1 0 6m2-8a7 7 0 0 1 0 10"/><path class="speaker-mute" d="m16 10 4 4m0-4-4 4"/></svg>
+        </button>
+        <button type="button" id="help" class="icon-btn" aria-label="玩法说明" title="玩法说明">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9a2.7 2.7 0 0 1 5.3.6c0 2-2.7 2.3-2.7 4M12 17h.01"/></svg>
+        </button>
+        <button type="button" id="restart-run" class="soft-btn">新开一轮</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="heading" aria-labelledby="stage-title">
+      <div class="heading-main">
+        <div class="stage-caption"><span class="live-dot"></span><span id="stage-number">第 1 / 30 关</span></div>
+        <h1 id="stage-title">暖场爆破</h1>
+      </div>
+      <div class="stage-side">
+        <span class="difficulty" id="difficulty">热身关</span>
+        <div class="stage-nav" id="stage-nav" aria-label="闯关进度"></div>
+      </div>
+    </section>
+
+    <section class="cabinet" aria-label="游戏">
+      <div class="arena" id="arena">
+        <canvas id="game" width="1280" height="600" tabindex="0" aria-label="弹弓战场。方向键瞄准，空格发射或释放技能。" aria-describedby="control-hint"></canvas>
+        <div class="arena-hud">
+          <div class="score-card">
+            <span>本轮得分</span><strong id="score">000000</strong>
+          </div>
+          <div class="target-card">
+            <canvas id="pig-icon" width="76" height="76" aria-hidden="true"></canvas>
+            <div><span>剩余目标</span><strong id="targets">–</strong></div>
+          </div>
+        </div>
+        <div class="sling-hint" id="sling-hint">向左下拖动</div>
+        <div class="combo" id="combo" aria-hidden="true"></div>
+        <div class="notice" id="notice" aria-hidden="true"></div>
+        <noscript><p class="noscript">启用 JavaScript 后即可游玩。</p></noscript>
+      </div>
+      <div class="toolbar">
+        <div class="ammo-wrap"><span class="toolbar-label">出战顺序</span><div class="ammo" id="ammo"></div></div>
+        <div class="toolbar-actions">
+          <button type="button" class="soft-btn retry" id="retry" aria-label="重玩本关" title="重玩本关（R）">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 5v6h6"/></svg><span>重玩</span>
+          </button>
+          <button type="button" class="primary-btn skill" id="ability" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2 5 13h6l-1 9 9-12h-6l1-8Z"/></svg><span id="ability-label">飞行技能</span><kbd>空格</kbd>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="game-info">
+      <p id="control-hint">拖动小鸟瞄准，松手发射。飞行中点击战场或按空格释放技能。</p>
+      <p class="rotation-tip">横屏可放大战场</p>
+      <p class="best-score">本机纪录 <strong id="best-score">0</strong></p>
+    </div>
+
+    <section class="boss-brief" id="boss-brief" aria-label="敌方情报" hidden>
+      <span class="brief-tag">敌方情报</span><span id="enemy-brief"></span>
+    </section>
+    <section class="run" aria-labelledby="run-title">
+      <div class="run-title"><div class="stack-icon" aria-hidden="true"></div><h2 id="run-title">本轮强化</h2></div>
+      <div id="upgrades" class="upgrades"><span class="empty-run">通关后抽取强化卡，效果会持续叠加。</span></div>
+      <button type="button" id="clear-cards" class="soft-btn clear-cards" disabled>清空卡片</button>
+    </section>
+  </main>
+
+  <p class="sr-only" id="announcer" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <dialog id="result" class="result-dialog" aria-labelledby="result-title">
+    <div class="result-body">
+      <div class="result-stars" id="result-stars" aria-hidden="true"></div>
+      <h2 id="result-title"></h2>
+      <p id="result-copy"></p>
+      <div id="draw" class="draw" hidden>
+        <h3>挑一张强化卡</h3>
+        <div id="cards" class="cards"></div>
+        <p class="draw-hint">选中的卡会跟随你打完这一轮。</p>
+      </div>
+      <div class="dialog-actions" id="result-actions"></div>
+    </div>
+  </dialog>
+  <dialog id="instructions" class="simple-dialog" aria-labelledby="help-title">
+    <h2 id="help-title">怎么玩</h2>
+    <dl>
+      <dt>瞄准发射</dt><dd>按住弹弓上的小鸟，向左拉动。白点显示弹道，松手发射。用键盘时，先聚焦战场，再按方向键调整瞄准，空格发射。</dd>
+      <dt>飞行技能</dt><dd>发射后点战场或按空格。红鸟冲击、黄鸟加速、蓝鸟分裂、黑鸟引爆。每只鸟只能释放一次。</dd>
+      <dt>重装守军</dt><dd>铁盔猪更耐撞，护盾猪先破盾再掉血，爆炸适合破防。猪王进入第二阶段时会震开周围的小鸟。</dd>
+      <dt>叠加强化</dt><dd>击倒所有小猪即可通关。从三张随机卡中选一张，可重复获得并叠加。「清空卡片」会去掉所有强化，重开当前关。按 R 可重玩本关。</dd>
+      <dt>无尽挑战</dt><dd>前三关热身，之后逐关提高难度。打完第 30 关会进入无尽模式。游戏自动记住当前关和选过的卡。</dd>
+    </dl>
+    <button type="button" class="primary-btn" id="close-help">开始玩</button>
+  </dialog>
+  <dialog id="confirm" class="simple-dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">新开一轮？</h2><p>将从第一关开始，重新抽取强化卡。</p>
+    <div class="dialog-actions"><button type="button" class="soft-btn" id="cancel-new">继续本轮</button><button type="button" class="primary-btn" id="confirm-new">开始新一轮</button></div>
+  </dialog>
+  <dialog id="confirm-clear" class="simple-dialog" aria-labelledby="clear-title">
+    <h2 id="clear-title">清空全部卡片？</h2>
+    <p>移除本轮已选强化，从当前关的开头重新挑战。</p>
+    <div class="dialog-actions"><button type="button" class="soft-btn" id="cancel-clear">保留卡片</button><button type="button" class="primary-btn" id="accept-clear">清空并重开</button></div>
+  </dialog>
+</body>
+</html>
