@@ -1,0 +1,229 @@
+[
+  {
+    "id": "renderer-honour-reduced-motion",
+    "title": "把系统的「减少动态效果」传给渲染器，别再抖屏、别喷满屏粒子",
+    "kind": "replace",
+    "file": "docs/main.js",
+    "old": "  const renderer = window.BirdRenderer.create(canvas);",
+    "new": "  const renderer = window.BirdRenderer.create(canvas, { reducedMotion: reduced.matches });",
+    "note": "render.js:605 的 create(canvas, options) 只有拿到 options.reducedMotion 才会关掉抖屏（710/723/735）并把粒子密度降到一半（701），但 main.js:26 一直没传这个参数，等于系统开关白设。reduced 在 main.js:24 就先定义了，顺序没问题。",
+    "marker": "BirdRenderer.create(canvas, { reducedMotion: reduced.matches })"
+  },
+  {
+    "id": "pause-on-tab-hidden",
+    "title": "切到后台时取消拖拽并撤掉待弹的结算窗",
+    "kind": "insert",
+    "file": "docs/main.js",
+    "anchor": "  window.addEventListener('resize', cancelGesture);\n",
+    "content": "  document.addEventListener('visibilitychange', () => {\n    if (!document.hidden) return;\n    cancelGesture();\n    clearTimeout(pendingResult);\n  });\n",
+    "note": "main.js:340 用 560ms 的 setTimeout 才弹结算窗，浏览器在后台照样跑定时器，于是玩家切回来时关卡结算已经自己弹出来了；顺手把进行中的拖拽取消掉，免得回来时还挂着一个手势。",
+    "marker": "document.addEventListener('visibilitychange'"
+  },
+  {
+    "id": "audio-suspend-when-hidden",
+    "title": "页面隐藏时挂起 AudioContext",
+    "kind": "insert",
+    "file": "docs/audio.js",
+    "anchor": "  window.BirdAudio = { unlock, play, setMuted, isMuted: () => muted };",
+    "before": true,
+    "content": "  document.addEventListener(\"visibilitychange\", () => {\n    if (!document.hidden || !context || context.state !== \"running\") return;\n    context.suspend().catch(() => {});\n  });\n\n",
+    "note": "audio.js 全程没有处理页面可见性，切到后台后 AudioContext 一直是 running 状态，手机浏览器会一直占着音频通道、也更费电；隐藏时 suspend，下次 unlock 会自动 resume。",
+    "marker": "context.suspend().catch"
+  },
+  {
+    "id": "meta-apple-mobile-web-app",
+    "title": "补 apple-mobile-web-app-* 与 mobile-web-app-capable，主屏打开时不再显示浏览器外壳",
+    "kind": "insert",
+    "file": "docs/index.html",
+    "anchor": "  <meta name=\"theme-color\" content=\"#1d133a\">\n",
+    "before": true,
+    "content": "  <meta name=\"apple-mobile-web-app-capable\" content=\"yes\">\n  <meta name=\"mobile-web-app-capable\" content=\"yes\">\n  <meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black-translucent\">\n  <meta name=\"apple-mobile-web-app-title\" content=\"愤怒的小鸟\">\n",
+    "note": "页面已经有 theme-color 和 viewport-fit=cover，但缺 iOS 的 web-app 系列声明：从主屏打开时状态栏是白色的、会盖住 header，标题也会退回成长文件名。",
+    "marker": "apple-mobile-web-app-capable"
+  },
+  {
+    "id": "meta-color-scheme-and-format-detection",
+    "title": "声明 color-scheme: dark 并关掉 iOS 把数字识别成电话",
+    "kind": "insert",
+    "file": "docs/index.html",
+    "anchor": "  <meta name=\"theme-color\" content=\"#1d133a\">\n",
+    "before": true,
+    "content": "  <meta name=\"color-scheme\" content=\"dark\">\n  <meta name=\"format-detection\" content=\"telephone=no\">\n",
+    "note": "样式里 :root 写了 color-scheme: dark，但 HTML 没同步声明，滚动条/表单控件在部分浏览器里仍按浅色画；body 里有「第 1 / 30 关」这类数字，iOS 会当成电话号码加下划线。",
+    "marker": "name=\"format-detection\""
+  },
+  {
+    "id": "open-graph-twitter-cards",
+    "title": "补 Open Graph / Twitter 分享卡片，用 arena.webp 当预览图",
+    "kind": "insert",
+    "file": "docs/index.html",
+    "anchor": "  <title>愤怒的小鸟 · 变态版</title>\n",
+    "content": "  <meta property=\"og:type\" content=\"website\">\n  <meta property=\"og:site_name\" content=\"愤怒的小鸟 · 变态版\">\n  <meta property=\"og:locale\" content=\"zh_CN\">\n  <meta property=\"og:title\" content=\"愤怒的小鸟 · 变态版\">\n  <meta property=\"og:description\" content=\"拉弓、空中放技能、三选一叠强化。30 关主线与无尽模式的弹弓物理闯关小游戏。\">\n  <meta property=\"og:url\" content=\"https://yyds213236.github.io/angry-birds-chaos/\">\n  <meta property=\"og:image\" content=\"https://yyds213236.github.io/angry-birds-chaos/docs/arena.webp\">\n  <meta name=\"twitter:card\" content=\"summary_large_image\">\n  <meta name=\"twitter:title\" content=\"愤怒的小鸟 · 变态版\">\n  <meta name=\"twitter:description\" content=\"拉弓、空中放技能、三选一叠强化。30 关主线与无尽模式的弹弓物理闯关小游戏。\">\n  <meta name=\"twitter:image\" content=\"https://yyds213236.github.io/angry-birds-chaos/docs/arena.webp\">\n  <meta name=\"twitter:image:alt\" content=\"弹弓战场的背景：紫色天空与远处山丘\">\n",
+    "note": "现在分享链接只有标题和一行描述，没有任何插图；docs/arena.webp 就是战场背景图，拿来当 og:image 不用新增资源。地址写死成 Pages 的绝对地址，因为抓取方不解析相对路径。",
+    "marker": "property=\"og:image\""
+  },
+  {
+    "id": "preload-arena-image",
+    "title": "预加载 arena.webp，首帧不再白底闪一下",
+    "kind": "insert",
+    "file": "docs/index.html",
+    "anchor": "  <link rel=\"stylesheet\" href=\"./style.css?v=reinforcements-1\">\n",
+    "before": true,
+    "content": "  <link rel=\"preload\" as=\"image\" href=\"./arena.webp\" fetchpriority=\"high\">\n",
+    "note": "style.css:54 把 arena.webp 当 .arena 的背景图，浏览器要等 CSS 解析完才发现这张图，晚于 canvas 首帧，于是战场会先闪一下纯色。用 preload 提前拉，成本只有一行。",
+    "marker": "rel=\"preload\" as=\"image\" href=\"./arena.webp\""
+  },
+  {
+    "id": "canvas-role-application",
+    "title": "给战场 canvas 加 role=\"application\"，读屏器不再把方向键当成浏览命令",
+    "kind": "replace",
+    "file": "docs/index.html",
+    "old": "id=\"game\" width=\"1280\" height=\"600\" tabindex=\"0\"",
+    "new": "id=\"game\" width=\"1280\" height=\"600\" role=\"application\" tabindex=\"0\"",
+    "note": "canvas 已经可聚焦、也有 aria-label，但没声明角色时读屏器用「浏览」模式吃掉方向键，键盘瞄准根本按不动。role=\"application\" 让它把按键交给页面自己处理。",
+    "marker": "role=\"application\""
+  },
+  {
+    "id": "skip-link-to-arena",
+    "title": "加一条「跳到战场」的跳转链接，键盘用户不用一路 Tab 过页头",
+    "kind": "replace",
+    "file": "docs/index.html",
+    "old": "<body>\n  <header class=\"site-header\">",
+    "new": "<body>\n  <a class=\"skip-link\" href=\"#game\">跳到战场</a>\n  <header class=\"site-header\">",
+    "note": "页头有音效、玩法说明、新开一轮三个按钮，Tab 到这里必须先过三下才能到 canvas；canvas 本身有 tabindex=0，是合法的跳转目标。（配套样式在 skip-link-style 那一项。）",
+    "marker": "class=\"skip-link\" href=\"#game\""
+  },
+  {
+    "id": "target-readout-readable",
+    "title": "把「剩余小猪」读数从 aria-hidden 里放出来",
+    "kind": "replace",
+    "file": "docs/index.html",
+    "old": "<div class=\"target-readout\" aria-hidden=\"true\">",
+    "new": "<div class=\"target-readout\">",
+    "note": "外层的 .target-card 有 role=\"group\" aria-label=\"剩余小猪\"，但里面整块读数是 aria-hidden，读屏器只会念出一个空的分组名，永远拿不到数字；数字本身是文本，放开隐藏就能按需读到。",
+    "marker": "<div class=\"target-readout\">"
+  },
+  {
+    "id": "aria-keyshortcuts-on-buttons",
+    "title": "给重玩/技能按钮标上 aria-keyshortcuts",
+    "kind": "replace",
+    "file": "docs/index.html",
+    "edits": [
+      {
+        "old": "id=\"retry\" aria-label=\"重玩本关\" title=\"重玩本关（R）\"",
+        "new": "id=\"retry\" aria-label=\"重玩本关\" aria-keyshortcuts=\"r\" title=\"重玩本关（R）\""
+      },
+      {
+        "old": "<button type=\"button\" class=\"primary-btn skill\" id=\"ability\" disabled>",
+        "new": "<button type=\"button\" class=\"primary-btn skill\" id=\"ability\" aria-keyshortcuts=\"space\" disabled>"
+      }
+    ],
+    "note": "main.js:661 起支持方向键瞄准、空格发射/技能、R 重玩，但按钮上没有 aria-keyshortcuts，读屏器用户无从得知；title 里的「（R）」对读屏器也不可靠。",
+    "marker": "aria-keyshortcuts=\"space\""
+  },
+  {
+    "id": "body-overscroll-behavior",
+    "title": "body 加 overscroll-behavior: none，下拉不再触发刷新",
+    "kind": "insert",
+    "file": "docs/style.css",
+    "anchor": "body {\n  margin: 0;\n",
+    "content": "  overscroll-behavior: none;\n",
+    "note": "战场是整屏拖拽操作的，手机上从画布外往下拉很容易触发浏览器的下拉刷新，一次误触就把整关刷掉（进度虽然存了，但手感很差）。",
+    "marker": "overscroll-behavior: none;"
+  },
+  {
+    "id": "text-size-adjust",
+    "title": "锁定 -webkit-text-size-adjust，横竖屏切换时字号不乱跳",
+    "kind": "insert",
+    "file": "docs/style.css",
+    "anchor": "  min-height: 100svh;\n",
+    "content": "  -webkit-text-size-adjust: 100%;\n  text-size-adjust: 100%;\n",
+    "note": "页面用 svh 和 aspect-ratio 自己算高度，iOS 在横屏/放大时还会二次调整字号，反而让 clamp() 的字号跟布局对不上。",
+    "marker": "text-size-adjust: 100%;"
+  },
+  {
+    "id": "button-touch-action-and-select",
+    "title": "按钮补 touch-action: manipulation 和 user-select: none",
+    "kind": "replace",
+    "file": "docs/style.css",
+    "old": "button { font: inherit; cursor: pointer; }",
+    "new": "button { font: inherit; cursor: pointer; touch-action: manipulation; user-select: none; }",
+    "note": ".arena 已经设了 user-select: none，但工具栏按钮没有：手机上长按「重玩」会选中按钮文字并弹系统菜单；touch-action: manipulation 同时消掉双击缩放带来的 300ms 延迟。",
+    "marker": "touch-action: manipulation; user-select: none;"
+  },
+  {
+    "id": "hover-none-reset",
+    "title": "触屏设备上清掉 hover 残留，按一下不会一直亮着",
+    "kind": "insert",
+    "file": "docs/style.css",
+    "anchor": "[hidden] { display: none !important; }\n",
+    "content": "\n/* 触屏没有真正的 hover：按下后 :hover 会一直粘住，把按钮留在悬浮态。 */\n@media (hover: none) {\n  .icon-btn:hover, .soft-btn:hover { background: #392753; transform: none; }\n  .primary-btn:hover:not(:disabled) { background: #ffd45f; transform: none; }\n}\n",
+    "note": "style.css:40/152 的 :hover 规则在触屏上点完就粘住，按钮一直是「浮起来」的样子，看起来像卡住了；用 (hover: none) 单独复位。",
+    "marker": "@media (hover: none)"
+  },
+  {
+    "id": "paused-hide-crosshair",
+    "title": "弹窗打开时把战场准星换回普通箭头",
+    "kind": "replace",
+    "file": "docs/style.css",
+    "old": "#game[data-mode=\"aiming\"] { cursor: grabbing; }",
+    "new": "#game[data-mode=\"aiming\"] { cursor: grabbing; }\nbody:has(dialog[open]) #game { cursor: default; }",
+    "note": "#game 常驻 cursor: crosshair（style.css:120），结算/玩法说明弹窗盖在上面时战场其实已经停了，鼠标移出弹窗还能看到准星，容易以为还能瞄准。",
+    "marker": "body:has(dialog[open]) #game { cursor: default; }"
+  },
+  {
+    "id": "prefers-contrast-more",
+    "title": "支持系统「增强对比度」：边框和次要文字加深",
+    "kind": "append",
+    "file": "docs/style.css",
+    "content": "\n/* 系统开启「增强对比度」时，把偏淡的边框和次要文字压深一档。 */\n@media (prefers-contrast: more) {\n  :root { --line: #9276b4; --muted: #efe4fb; }\n  .stage-node { border-color: #a98cc8; }\n  .game-info, .best-score, .empty-run { color: #f3e9ff; }\n  .score-card, .target-card { border-color: #180d28; }\n}\n",
+    "note": "全站大量使用半透明边框（如 #634884、#815e9d56）和 --muted: #cbb8df，在强光或低对比度屏幕上很难看清；已经有 prefers-reduced-motion 的先例，补一档对比度是同一套思路。",
+    "marker": "prefers-contrast: more"
+  },
+  {
+    "id": "prefers-reduced-transparency",
+    "title": "系统要求减少透明时，关掉毛玻璃背景",
+    "kind": "append",
+    "file": "docs/style.css",
+    "content": "\n/* 系统开启「减少透明度」时，别再用毛玻璃。 */\n@media (prefers-reduced-transparency: reduce) {\n  dialog::backdrop { background: #190e37f2; backdrop-filter: none; }\n  .site-header { background: #1c122f; }\n}\n",
+    "note": "dialog::backdrop 用了 backdrop-filter: blur(5px)（style.css:175），页面头部也是半透明色；对透明敏感的系统和低端机会觉得糊，也更容易掉帧。",
+    "marker": "prefers-reduced-transparency: reduce"
+  },
+  {
+    "id": "dialog-overscroll-contain",
+    "title": "弹窗内部滚动加 overscroll-behavior: contain",
+    "kind": "replace",
+    "file": "docs/style.css",
+    "old": "max-height: calc(100dvh - 34px); overflow: auto; }",
+    "new": "max-height: calc(100dvh - 34px); overflow: auto; overscroll-behavior: contain; }",
+    "note": "结果弹窗在手机上会超出屏幕并内部滚动（max-height: calc(100dvh - 34px)），滚到底再继续划会带动后面的页面一起滚，弹窗看起来像在晃。",
+    "marker": "overflow: auto; overscroll-behavior: contain; }"
+  },
+  {
+    "id": "skip-link-style",
+    "title": "给「跳到战场」补样式：平时藏起来，聚焦时才出现",
+    "kind": "append",
+    "file": "docs/style.css",
+    "content": "\n/* 跳转链接：不聚焦时藏起来，Tab 到它才显示在页头之上。 */\n.skip-link {\n  position: absolute;\n  left: 12px;\n  top: -60px;\n  z-index: 20;\n  padding: 10px 14px;\n  border-radius: 10px;\n  color: #2e1737;\n  background: #ffd45f;\n  font-size: 14px;\n  font-weight: 850;\n  text-decoration: none;\n  transition: top .16s ease;\n}\n.skip-link:focus-visible { top: 12px; outline: 3px solid #ffdc81; outline-offset: 3px; }\n",
+    "note": "配套 skip-link-to-arena 那一项：没有样式的话它会作为一行普通链接挤在页头上面，破坏布局；用 top 位移隐藏、:focus-visible 时滑出，是标准做法且不动 DOM 顺序。",
+    "marker": ".skip-link:focus-visible"
+  },
+  {
+    "id": "readme-known-issues",
+    "title": "README 补「已知问题」一节",
+    "kind": "append",
+    "file": "README.md",
+    "content": "\n## 已知问题\n\n- 只有 SVG 的 `rel=\"icon\"`，没有 PNG 的 `apple-touch-icon`：iOS 添加到主屏时图标会是页面截图而不是小鸟。\n- 分享卡片用的是 `docs/arena.webp`，少数抓取方只认 JPG/PNG，可能显示不出图。\n- 没有 service worker，断网就开不了；「本机保存」只在同一个浏览器里有效。\n- 分波战斗里尚未上场的小猪只按数量记账，不会真的生成实体，所以超远关卡的人数是一个精确的公式值（如 `3 × 2^999999`），不是一只只数出来的。\n",
+    "note": "上面几条都是从代码里能直接看出来的限制，写进 README 能省掉「为什么我的图标不对」「为什么断网打不开」这类追问。",
+    "marker": "## 已知问题"
+  },
+  {
+    "id": "test-wave-cap-boundary",
+    "title": "补一条 96 只/波上限的边界测试（第 8 关正好一波，第 9 关开始分波）",
+    "kind": "append",
+    "file": "tests/campaign.test.cjs",
+    "content": "\ntest('the 96-pig wave cap fills exactly one wave at stage 8 and splits from stage 9 on', () => {\n  const game = create();\n  for (const stage of [7, 8, 9, 10, 11, 12]) {\n    assert.equal(game.loadLevel(stage - 1), true, `stage ${stage}: load`);\n    const state = game.getState();\n    const targets = targetsAt(stage);\n    const onField = targets < 96n ? targets : 96n;\n    assert.equal(state.wave, 1n, `stage ${stage}: starts on wave 1`);\n    assert.equal(BigInt(state.totalWaves), (targets + 95n) / 96n, `stage ${stage}: total waves`);\n    assert.equal(BigInt(state.activeTargets), onField, `stage ${stage}: pigs on field`);\n    assert.equal(BigInt(state.queuedTargets) + BigInt(state.activeTargets), targets, `stage ${stage}: bookkeeping`);\n  }\n  assert.equal(game.loadLevel(7), true);\n  assert.equal(game.getState().totalWaves, 1n);\n  assert.equal(game.getState().queuedTargets, 0n);\n  assert.equal(game.loadLevel(8), true);\n  assert.equal(game.getState().totalWaves, 2n);\n  assert.equal(game.getState().queuedTargets, 96n);\n});\n",
+    "note": "waveSize = 96n 这个上限在测试里从来没被直接断言过：现有用例只覆盖「第二波 96 只」，totalWaves 一次都没查过。第 8 关正好 96 只（1 波），第 9 关 192 只（2 波），是这条边界唯一自然的分割点。",
+    "marker": "the 96-pig wave cap fills exactly one wave"
+  }
+]
